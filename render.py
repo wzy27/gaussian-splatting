@@ -21,9 +21,13 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
-    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, thre=0.05):
+    
+    # render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    # gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    
+    render_path = os.path.join(model_path, name, "upper_{:.2f}".format(thre), "renders")
+    gts_path = os.path.join(model_path, name, "upper_{:.2f}".format(thre), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
@@ -36,17 +40,22 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
     with torch.no_grad():
-        gaussians = GaussianModel(dataset.sh_degree)
-        scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
+        for i in range(1, 20):
+            thre = i * 0.05
+        # thre = 0.05
+        
+            gaussians = GaussianModel(dataset.sh_degree)
+            # scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
+            scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, thre=thre)
 
-        bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
-        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+            bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
+            background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background)
+            if not skip_train:
+                render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, thre)
 
-        if not skip_test:
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background)
+            if not skip_test:
+                render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, thre)
 
 if __name__ == "__main__":
     # Set up command line argument parser
