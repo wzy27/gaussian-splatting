@@ -13,6 +13,7 @@ import os
 import logging
 from argparse import ArgumentParser
 import shutil
+import numpy as np
 
 # This Python script is based on the shell converter script provided in the MipNerF 360 repository.
 parser = ArgumentParser("Colmap converter")
