@@ -209,8 +209,6 @@ if __name__ == "__main__":
         dense_test_iter.append(i)
     dense_test_iter.sort()
     
-    # for i in range(5000, 30000, 5000):
-    #     dense_test_iter.append(i)
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
