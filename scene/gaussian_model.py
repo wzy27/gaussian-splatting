@@ -13,13 +13,15 @@ import torch
 import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
+import torch.nn.functional as f
+
 import os
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
-from utils.general_utils import strip_symmetric, build_scaling_rotation
+from utils.general_utils import strip_symmetric, build_scaling_rotation, build_rotation
 
 class GaussianModel:
 
@@ -116,6 +118,13 @@ class GaussianModel:
     
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
+    
+    def get_normal(self): #TODO: add logic
+        rotation_matrix = build_rotation(self._rotation)
+        min_scale_index = self.get_scaling.min(axis=1).indices
+        normal_vec = f.one_hot(min_scale_index).unsqueeze(-1).type_as(rotation_matrix)
+        rotated_vec = rotation_matrix @ normal_vec
+        return rotated_vec
 
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
