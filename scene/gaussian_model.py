@@ -14,6 +14,7 @@ import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import torch.nn.functional as f
+# import pyvoro
 
 import os
 from utils.system_utils import mkdir_p
@@ -114,7 +115,8 @@ class GaussianModel:
     
     @property
     def get_opacity(self):
-        return self.opacity_activation(self._opacity)
+        # return self.opacity_activation(self._opacity)
+        return torch.ones(self._opacity.shape, device="cuda")
     
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
@@ -154,6 +156,17 @@ class GaussianModel:
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        
+        # upper = self._xyz.max(axis=0).values
+        # lower = self._xyz.min(axis=0).values
+        
+        
+        # pyvoro.compute_voronoi(
+        #     self._xyz[:500], # point positions
+        #     torch.stack((lower, upper), dim=1), # limits
+        #     2.0, # block size
+        # )
+        # pass
     
     def random_init(self, pcd, point_cnt):
         xyz = torch.tensor(np.asarray(pcd.points)).float()
@@ -237,7 +250,10 @@ class GaussianModel:
         normals = np.zeros_like(xyz)
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        opacities = self._opacity.detach().cpu().numpy()
+        
+        # opacities = self._opacity.detach().cpu().numpy()
+        opacities = torch.ones(self._opacity.shape, device="cuda").detach().cpu().numpy()
+        
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
 
