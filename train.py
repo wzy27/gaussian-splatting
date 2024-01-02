@@ -12,7 +12,7 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, l2_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -22,6 +22,11 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+import mesh_to_sdf
+import trimesh 
+import subprocess
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -37,6 +42,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+    
+    if not os.path.exists('data/mesh/mesh_dtu40_dense_1.4.ply'):
+        get_mesh_command = "./ipsr.sh" 
+        try:
+            result = subprocess.check_output(get_mesh_command, shell = True, 
+                                             executable = "/bin/bash", stderr = subprocess.STDOUT)
+        except subprocess.CalledProcessError as cpe:
+            result = cpe.output
+        finally:
+            print("initial mesh extracted.")
+    else:
+        print("mesh already extracted.")
+    
+    os.environ['PYOPENGL_PLATFORM'] = 'egl'
+    mesh = trimesh.load('data/mesh/mesh_dtu40_dense_1.4.ply') # TODO:change path
+    surface_point_clouds = mesh_to_sdf.get_surface_point_cloud(mesh)
+    print("surface point cloud inited.")
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -67,6 +89,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_start.record()
 
         gaussians.update_learning_rate(iteration)
+        
+        # TODO:Geometry processing module: recalculate mesh & SDF
+        if iteration % 500 == 0:
+            pass
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -87,9 +113,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
+        # TODO: add geometry loss - density to SDF
+        sdf_values = surface_point_clouds.get_sdf_in_batches(gaussians.get_xyz.cpu().detach().numpy(), use_depth_buffer=True, sample_count=1e7)
+        estimated_opacity = torch.sigmoid(torch.from_numpy(sdf_values).cuda()).unsqueeze(-1)
+        loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
+        opacity_loss_lambda = 0.1 # TODO: add into opt.lambda_opacity
+        
+        # loss_opacity_l2 = opacity_loss_lambda = 0
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss = (1.0 - opt.lambda_dssim - opacity_loss_lambda) * Ll1 + \
+            opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + \
+            opacity_loss_lambda * loss_opacity_l2
+        
         loss.backward()
 
         iter_end.record()
