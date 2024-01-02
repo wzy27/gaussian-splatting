@@ -16,7 +16,7 @@ from utils.loss_utils import l1_loss, l2_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
+from utils.general_utils import safe_state, logistic_sigmoid
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -26,6 +26,7 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 import mesh_to_sdf
 import trimesh 
 import subprocess
+import numpy as np
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -114,12 +115,27 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         # TODO: add geometry loss - density to SDF
-        sdf_values = surface_point_clouds.get_sdf_in_batches(gaussians.get_xyz.cpu().detach().numpy(), use_depth_buffer=True, sample_count=1e7)
-        estimated_opacity = torch.sigmoid(torch.from_numpy(sdf_values).cuda()).unsqueeze(-1)
-        loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
-        opacity_loss_lambda = 0.1 # TODO: add into opt.lambda_opacity
+        # all point used: 5 times more time used in sdf sampling
         
-        # loss_opacity_l2 = opacity_loss_lambda = 0
+        # import time
+        # start = time.time()
+        # if iteration > 1:
+        #     print("before:", start - end)
+        
+        # coords = gaussians.get_xyz.cpu().detach().numpy()
+        # proportion = 1000.0 / coords.shape[0]
+        # sampled_mask = np.random.choice([False, True], size=coords.shape[0], p=[1 - proportion, proportion])
+        # coords = coords[sampled_mask]
+        
+        # sdf_values = surface_point_clouds.get_sdf_in_batches(coords, use_depth_buffer=True)
+        # # end = time.time()
+        # # print(end - start)
+        # opacity_density_scaler = 1.0
+        # estimated_opacity = 4 * logistic_sigmoid(torch.from_numpy(sdf_values).cuda(), opacity_density_scaler).unsqueeze(-1)
+        # loss_opacity_l2 = l2_loss(gaussians.get_opacity[sampled_mask], estimated_opacity)
+        # opacity_loss_lambda = 0.01 # TODO: add into opt.lambda_opacity
+        
+        loss_opacity_l2 = opacity_loss_lambda = torch.zeros(1).cuda()
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim - opacity_loss_lambda) * Ll1 + \
@@ -140,7 +156,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -192,9 +208,10 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/loss_opacity', loss_opacity_l2.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
         tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
