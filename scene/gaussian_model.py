@@ -461,3 +461,20 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+        
+    def extract_points_for_recon(self, opacity_threshold, sdf_values, sdf_threshold, path):
+        # throw away too transparent/far points
+        transparent_mask = torch.where(self.get_opacity.squeeze(-1) < opacity_threshold, True, False)
+        sdf_mask = torch.where(torch.abs(sdf_values) > sdf_threshold, True, False)
+        filtered_mask = torch.logical_or(transparent_mask, sdf_mask)
+        
+        mkdir_p(os.path.dirname(path))
+
+        xyz = self._xyz[filtered_mask].detach().cpu().numpy()
+        dtype_full = [(attribute, 'f4') for attribute in ['x', 'y', 'z']]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = xyz
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)

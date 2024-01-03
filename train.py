@@ -17,6 +17,7 @@ from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, logistic_sigmoid
+from utils.system_utils import mkdir_p
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -92,7 +93,32 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.update_learning_rate(iteration)
         
         # TODO:Geometry processing module: recalculate mesh & SDF
-        if iteration % 500 == 0:
+        if iteration % 100 == 0 or iteration == 1: # TODO:DEBUG
+            # Extract point cloud for IPSR
+            coords = gaussians.get_xyz.cpu().detach().numpy()
+            sdf_values = surface_point_clouds.get_sdf_in_batches(coords, use_depth_buffer=True)
+            sdf_values = torch.from_numpy(sdf_values).cuda()
+            
+            point_cloud_path = os.path.join(dataset.model_path, 'inter_point_cloud/iter_{}.ply'.format(iteration))
+            mesh_path = os.path.join(dataset.model_path, 'inter_mesh/iter_{}.ply'.format(iteration))
+            
+            gaussians.extract_points_for_recon(opacity_threshold=0.5, sdf_values=sdf_values, sdf_threshold=1.0,
+                                               path=point_cloud_path)
+            
+            # Do IPSR 
+            get_mesh_command = "./ipsr.sh {} {}".format(point_cloud_path, mesh_path) 
+            try:
+                mkdir_p(os.path.dirname(mesh_path))
+                result = subprocess.check_output(get_mesh_command, shell = True, 
+                                                executable = "/bin/bash", stderr = subprocess.STDOUT)
+            except subprocess.CalledProcessError as cpe:
+                result = cpe.output
+            finally:
+                print("intermediate mesh extracted.")
+                
+            # Load new mesh， ~15s for 50k points
+            mesh = trimesh.load(mesh_path)
+            surface_point_clouds = mesh_to_sdf.get_surface_point_cloud(mesh)    
             pass
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
@@ -122,18 +148,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # if iteration > 1:
         #     print("before:", start - end)
         
-        # coords = gaussians.get_xyz.cpu().detach().numpy()
-        # proportion = 1000.0 / coords.shape[0]
-        # sampled_mask = np.random.choice([False, True], size=coords.shape[0], p=[1 - proportion, proportion])
-        # coords = coords[sampled_mask]
+        coords = gaussians.get_xyz.cpu().detach().numpy()
+        proportion = 1000.0 / coords.shape[0]
+        sampled_mask = np.random.choice([False, True], size=coords.shape[0], p=[1 - proportion, proportion])
+        coords = coords[sampled_mask]
         
-        # sdf_values = surface_point_clouds.get_sdf_in_batches(coords, use_depth_buffer=True)
-        # # end = time.time()
-        # # print(end - start)
-        # opacity_density_scaler = 1.0
-        # estimated_opacity = 4 * logistic_sigmoid(torch.from_numpy(sdf_values).cuda(), opacity_density_scaler).unsqueeze(-1)
-        # loss_opacity_l2 = l2_loss(gaussians.get_opacity[sampled_mask], estimated_opacity)
-        # opacity_loss_lambda = 0.01 # TODO: add into opt.lambda_opacity
+        sdf_values = surface_point_clouds.get_sdf_in_batches(coords, use_depth_buffer=True)
+        # end = time.time()
+        # print(end - start)
+        opacity_density_scaler = 1.0
+        estimated_opacity = 4 * logistic_sigmoid(torch.from_numpy(sdf_values).cuda(), opacity_density_scaler).unsqueeze(-1)
+        loss_opacity_l2 = l2_loss(gaussians.get_opacity[sampled_mask], estimated_opacity)
+        # loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
+        opacity_loss_lambda = 0.01 # TODO: add into opt.lambda_opacity
         
         loss_opacity_l2 = opacity_loss_lambda = torch.zeros(1).cuda()
         gt_image = viewpoint_cam.original_image.cuda()
