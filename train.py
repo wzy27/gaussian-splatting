@@ -24,11 +24,6 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 
-import mesh_to_sdf
-import trimesh 
-import subprocess
-import numpy as np
-
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -44,27 +39,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
-    
-    if not os.path.exists('data/mesh/mesh_dtu40_dense_1.4.ply'):
-        get_mesh_command = "./ipsr.sh" 
-        try:
-            result = subprocess.check_output(get_mesh_command, shell = True, 
-                                             executable = "/bin/bash", stderr = subprocess.STDOUT)
-        except subprocess.CalledProcessError as cpe:
-            result = cpe.output
-        finally:
-            print("initial mesh extracted.")
-    else:
-        print("mesh already extracted.")
-    
-    os.environ['PYOPENGL_PLATFORM'] = 'egl'
-    mesh = trimesh.load('data/mesh/mesh_dtu40_dense_1.4.ply') # TODO:change path
-    surface_point_clouds = mesh_to_sdf.get_surface_point_cloud(mesh)
-    print("surface point cloud inited.")
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
+    
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
 
@@ -73,54 +51,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):        
-        if network_gui.conn == None:
-            network_gui.try_connect()
-        while network_gui.conn != None:
-            try:
-                net_image_bytes = None
-                custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-                if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
-                    net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
-                network_gui.send(net_image_bytes, dataset.source_path)
-                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
-                    break
-            except Exception as e:
-                network_gui.conn = None
-
         iter_start.record()
-
         gaussians.update_learning_rate(iteration)
         
-        # TODO:Geometry processing module: recalculate mesh & SDF
-        if iteration % 100 == 0 or iteration == 1: # TODO:DEBUG
-            # Extract point cloud for IPSR
-            coords = gaussians.get_xyz.cpu().detach().numpy()
-            sdf_values = surface_point_clouds.get_sdf_in_batches(coords, use_depth_buffer=True)
-            sdf_values = torch.from_numpy(sdf_values).cuda()
-            
-            point_cloud_path = os.path.join(dataset.model_path, 'inter_point_cloud/iter_{}.ply'.format(iteration))
-            mesh_path = os.path.join(dataset.model_path, 'inter_mesh/iter_{}.ply'.format(iteration))
-            
-            gaussians.extract_points_for_recon(opacity_threshold=0.5, sdf_values=sdf_values, sdf_threshold=1.0,
-                                               path=point_cloud_path)
-            
-            # Do IPSR 
-            get_mesh_command = "./ipsr.sh {} {}".format(point_cloud_path, mesh_path) 
-            try:
-                mkdir_p(os.path.dirname(mesh_path))
-                result = subprocess.check_output(get_mesh_command, shell = True, 
-                                                executable = "/bin/bash", stderr = subprocess.STDOUT)
-            except subprocess.CalledProcessError as cpe:
-                result = cpe.output
-            finally:
-                print("intermediate mesh extracted.")
-                
-            # Load new mesh， ~15s for 50k points
-            mesh = trimesh.load(mesh_path)
-            surface_point_clouds = mesh_to_sdf.get_surface_point_cloud(mesh)    
-            pass
-
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
@@ -140,34 +73,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
-        # TODO: add geometry loss - density to SDF
-        # all point used: 5 times more time used in sdf sampling
-        
-        # import time
-        # start = time.time()
-        # if iteration > 1:
-        #     print("before:", start - end)
-        
-        coords = gaussians.get_xyz.cpu().detach().numpy()
-        proportion = 1000.0 / coords.shape[0]
-        sampled_mask = np.random.choice([False, True], size=coords.shape[0], p=[1 - proportion, proportion])
-        coords = coords[sampled_mask]
-        
-        sdf_values = surface_point_clouds.get_sdf_in_batches(coords, use_depth_buffer=True)
-        # end = time.time()
-        # print(end - start)
-        opacity_density_scaler = 1.0
-        estimated_opacity = 4 * logistic_sigmoid(torch.from_numpy(sdf_values).cuda(), opacity_density_scaler).unsqueeze(-1)
-        loss_opacity_l2 = l2_loss(gaussians.get_opacity[sampled_mask], estimated_opacity)
-        # loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
-        opacity_loss_lambda = 0.01 # TODO: add into opt.lambda_opacity
-        
-        loss_opacity_l2 = opacity_loss_lambda = torch.zeros(1).cuda()
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim - opacity_loss_lambda) * Ll1 + \
-            opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + \
-            opacity_loss_lambda * loss_opacity_l2
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + \
+            opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         
         loss.backward()
 
@@ -183,7 +92,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -235,10 +144,9 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
-        tb_writer.add_scalar('train_loss_patches/loss_opacity', loss_opacity_l2.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
         tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
@@ -312,7 +220,6 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 

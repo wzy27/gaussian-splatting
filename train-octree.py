@@ -91,30 +91,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        coords = gaussians.get_xyz.cpu().detach()
-        SDF_values = octree.querySDFfromWorld(coords)
-        # # Loss
+        loss_dict = {}
+        tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
+        SDF_values = octree.querySDFfromTree(tree_coords)
+        # # Loss TODO: add lambda into dataset/lp
         # geometry loss - density to SDF
         opacity_density_scaler = 5.0 # TODO: adjust this, change to VolSDF function?
         estimated_opacity = 4 * logistic_sigmoid(torch.from_numpy(SDF_values).cuda(), opacity_density_scaler).unsqueeze(-1)
         loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
-        lambda_opacity = 0.2
+        # lambda_opacity = 0.2
+        loss_dict["opacity_loss"] = loss_opacity_l2
+        # loss_opacity_l2 = lambda_opacity = 0
 
         # scale loss - smallest scale near 0/some threshold?
         loss_scale = torch.mean(gaussians.get_scaling.min(axis=-1).values)
-        lambda_scale = 0.1
-
+        # lambda_scale = 0.1
+        loss_dict["scale_loss"] = loss_scale
         # loss_scale = lambda_scale = 0
 
         # TODO: orientation loss - smallest scale direction with SDF direction
-        # gaussian_orientation = gaussians.get_normal().squeeze()
-        # # SDF_orientation = octree.queryNormalFromWorld(gaussians.get_xyz) #(N, 3)
+        gaussian_orientation = gaussians.get_normal().squeeze()
+        SDF_orientation = octree.queryNormalFromTree(tree_coords) #(N, 3)
         # SDF_orientation = torch.ones_like(gaussian_orientation).squeeze()
-        # similarity = torch.abs(gaussian_orientation * SDF_orientation)
-        # loss_orientation = 1 - torch.mean(similarity)
-        # lambda_orientation = 0
+        similarity = torch.abs(gaussian_orientation * SDF_orientation)
+        loss_orientation = 1 - torch.mean(similarity)
+        # lambda_orientation = 0.1
+        loss_dict["orientation_loss"] = loss_orientation
 
-        loss_orientation = lambda_orientation = 0
+        # loss_orientation = lambda_orientation = 0
 
         # points near surface loss - SDF near 0
         # loss_point_cloud = torch.mean(SDF_values)
@@ -122,11 +126,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
+        loss_dict["image_l1_loss"] = Ll1
         loss = (1.0 - opt.lambda_dssim) * Ll1 + \
             opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         
-        loss = loss + lambda_scale * loss_scale + lambda_orientation * loss_orientation + \
-            lambda_opacity * loss_opacity_l2
+        loss = loss + dataset.lambda_scale * loss_scale + dataset.lambda_orientation * loss_orientation + dataset.lambda_opacity * loss_opacity_l2
+        loss_dict["total_loss"] = loss
         
         loss.backward()
 
@@ -142,7 +147,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            training_report(tb_writer, iteration, loss_dict, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -192,12 +197,10 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(tb_writer, iteration, loss_dict, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
     if tb_writer:
-        tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
-        if loss_opacity_l2 is not None:
-            tb_writer.add_scalar('train_loss_patches/loss_opacity', loss_opacity_l2.item(), iteration)
-        tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
+        for name, value in loss_dict.items():
+            tb_writer.add_scalar('train_loss_patches/{}'.format(name), value.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
         tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
 
@@ -235,9 +238,6 @@ def training_report(tb_writer, iteration, Ll1, loss_opacity_l2, loss, l1_loss, e
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
 
-        # if tb_writer:
-            # tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            # tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":
