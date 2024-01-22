@@ -120,10 +120,10 @@ class GaussianModel:
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
     
-    def get_normal(self): #TODO: add logic
+    def get_normal(self): #TODO: fix bug here
         rotation_matrix = build_rotation(self._rotation)
         min_scale_index = self.get_scaling.min(axis=1).indices
-        normal_vec = f.one_hot(min_scale_index).unsqueeze(-1).type_as(rotation_matrix)
+        normal_vec = f.one_hot(min_scale_index, 3).unsqueeze(-1).type_as(rotation_matrix)
         rotated_vec = rotation_matrix @ normal_vec
         return rotated_vec
 
@@ -156,17 +156,6 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         
-        # upper = self._xyz.max(axis=0).values
-        # lower = self._xyz.min(axis=0).values
-        
-        
-        # pyvoro.compute_voronoi(
-        #     self._xyz[:500], # point positions
-        #     torch.stack((lower, upper), dim=1), # limits
-        #     2.0, # block size
-        # )
-        # pass
-    
     def random_init(self, pcd, point_cnt):
         xyz = torch.tensor(np.asarray(pcd.points)).float()
         

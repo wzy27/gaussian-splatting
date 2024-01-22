@@ -218,7 +218,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             
     return cam_infos
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
+def readNerfSyntheticInfo(path, white_background, eval, octree=None, extension=".png"):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
     print("Reading Test Transforms")
@@ -231,17 +231,33 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
     ply_path = os.path.join(path, "points3d.ply")
-    if not os.path.exists(ply_path):
-        # Since this data set has no colmap data, we start with random points
+
+    if octree is not None:
         num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
-        
-        # We create random points inside the bounds of the synthetic Blender scenes
+
+        # TODO: better init according to octree info
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
+        pass
+
+    if not os.path.exists(ply_path):
+        if octree is not None:
+            pass
+        else:
+            # Since this data set has no colmap data, we start with random points
+            num_pts = 100_000
+            print(f"Generating random point cloud ({num_pts})...")
+            
+            # We create random points inside the bounds of the synthetic Blender scenes
+            xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+            shs = np.random.random((num_pts, 3)) / 255.0
+            pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+            storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
         pcd = fetchPly(ply_path)
     except:
