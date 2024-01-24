@@ -11,6 +11,7 @@
 
 import os
 import torch
+import torch.nn.functional as F
 from random import randint
 from utils.loss_utils import l1_loss, l2_loss, ssim
 from gaussian_renderer import render, network_gui
@@ -107,8 +108,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # TODO: orientation loss - smallest scale direction with SDF direction, why so big???
         gaussian_orientation = gaussians.get_normal().squeeze() #(N, 3), normalized
-        SDF_orientation = octree.queryNormalFromTree(tree_coords) #(N, 3), not normalized
-        similarity = torch.abs((gaussian_orientation * SDF_orientation).sum())
+        SDF_orientation = F.normalize(octree.queryNormalFromTree(tree_coords)) #(N, 3), manually normalized
+        similarity = torch.abs((gaussian_orientation * SDF_orientation).sum(axis=-1))
         loss_orientation = 1 - torch.mean(similarity)
         loss_dict["orientation_loss"] = loss_orientation
 
