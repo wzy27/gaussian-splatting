@@ -54,6 +54,9 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.lambda_opacity = 0.2
+        self.lambda_scale = 0.1
+        self.lambda_orientation = 0.1
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -88,6 +91,13 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.random_background = False
         super().__init__(parser, "Optimization Parameters")
+
+class OverallParams(ParamGroup):
+    def __init__(self, parser):
+        self.epochs = 10
+        self.gaussian_iters = 30_000
+        self.first_gaussian = False
+        super().__init__(parser, "Overall Parameters")
 
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]

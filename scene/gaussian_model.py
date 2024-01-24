@@ -13,13 +13,16 @@ import torch
 import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
+import torch.nn.functional as f
+# import pyvoro
+
 import os
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
-from utils.general_utils import strip_symmetric, build_scaling_rotation
+from utils.general_utils import strip_symmetric, build_scaling_rotation, build_rotation
 
 class GaussianModel:
 
@@ -116,6 +119,13 @@ class GaussianModel:
     
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
+    
+    def get_normal(self): #TODO: fix bug here
+        rotation_matrix = build_rotation(self._rotation)
+        min_scale_index = self.get_scaling.min(axis=1).indices
+        normal_vec = f.one_hot(min_scale_index, 3).unsqueeze(-1).type_as(rotation_matrix)
+        rotated_vec = rotation_matrix @ normal_vec
+        return rotated_vec
 
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
@@ -137,7 +147,7 @@ class GaussianModel:
         rots[:, 0] = 1
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-
+        
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
@@ -145,6 +155,39 @@ class GaussianModel:
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        
+    def random_init(self, pcd, point_cnt):
+        xyz = torch.tensor(np.asarray(pcd.points)).float()
+        
+        upper = xyz.max(axis=0).values
+        lower = xyz.min(axis=0).values
+        xyz_rand = torch.rand(point_cnt, 3)
+        xyz_rand = xyz_rand * (upper - lower) + lower
+        
+        opacities_rand = inverse_sigmoid(0.1 * torch.ones((point_cnt, 1), dtype=torch.float, device="cuda"))
+        
+        features_dc_rand = torch.rand((point_cnt, 3, 1)) * 2 - 1
+        extra_len = 0
+        features_extra_rand = torch.rand((point_cnt, 3, extra_len)) * 2 - 1
+        
+        scale_low = 1e-4
+        scale_high = 1
+        scales_rand = torch.rand(point_cnt) * (scale_high-scale_low) + scale_low #TODO: better initialization
+        
+        scales_rand = torch.log(torch.sqrt(scales_rand))[...,None].repeat(1, 3)
+        
+        rots = torch.zeros((point_cnt, 4), device="cuda")
+        rots[:, 0] = 1
+
+        self._xyz = nn.Parameter(torch.tensor(xyz_rand, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.tensor(features_dc_rand, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.tensor(features_extra_rand, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities_rand, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._scaling = nn.Parameter(torch.tensor(scales_rand, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+
+        # self.ancestor = torch.tensor(range(xyz.shape[0]), device="cuda")
+        self.max_radii2D = torch.zeros((point_cnt), dtype=torch.float, device="cuda")
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -195,7 +238,9 @@ class GaussianModel:
         normals = np.zeros_like(xyz)
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        
         opacities = self._opacity.detach().cpu().numpy()
+        
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
 
@@ -252,7 +297,7 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
-
+        
         self.active_sh_degree = self.max_sh_degree
 
     def replace_tensor_to_optimizer(self, tensor, name):
@@ -405,3 +450,20 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+        
+    def extract_points_for_recon(self, opacity_threshold, sdf_values, sdf_threshold, path):
+        # throw away too transparent/far points
+        transparent_mask = torch.where(self.get_opacity.squeeze(-1) < opacity_threshold, True, False)
+        sdf_mask = torch.where(torch.abs(sdf_values) > sdf_threshold, True, False)
+        filtered_mask = torch.logical_or(transparent_mask, sdf_mask)
+        
+        mkdir_p(os.path.dirname(path))
+
+        xyz = self._xyz[filtered_mask].detach().cpu().numpy()
+        dtype_full = [(attribute, 'f4') for attribute in ['x', 'y', 'z']]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = xyz
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
