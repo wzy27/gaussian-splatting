@@ -82,7 +82,7 @@ def training(
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
-    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
@@ -115,14 +115,22 @@ def training(
         # s2 = time.time()
         loss_dict = {}
         tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
-        SDF_values = octree.querySDFfromTree(tree_coords)
+        SDF_values = torch.from_numpy(octree.querySDFfromTree(tree_coords)).cuda()
         # s3 = time.time()
         # # Loss
         # geometry loss - density to SDF
-        opacity_density_scaler = 5.0  # TODO: adjust this, change to VolSDF function?
+        near_threshold = 0.1
+        near_mask = torch.logical_or(
+            SDF_values < -near_threshold, SDF_values > near_threshold
+        )
+
+        opacity_density_scaler = 5.0
         estimated_opacity = 4 * logistic_sigmoid(
-            torch.from_numpy(SDF_values).cuda(), opacity_density_scaler
+            SDF_values, opacity_density_scaler
         ).unsqueeze(-1)
+        truncated_opacity = torch.where(near_mask, 0.0, 1.0).unsqueeze(-1)
+        estimated_opacity = torch.min(estimated_opacity, truncated_opacity)
+
         loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
         loss_dict["opacity_loss"] = loss_opacity_l2
 
@@ -164,7 +172,15 @@ def training(
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                SDF_avg = torch.mean(SDF_values)
+                SDF_var = torch.var(SDF_values)
+                progress_bar.set_postfix(
+                    {
+                        "Loss": f"{ema_loss_for_log:.{7}f}",
+                        "SDF_avg": f"{SDF_avg:.{7}f}",
+                        "SDF_var": f"{SDF_var:.{7}f}",
+                    }
+                )
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -174,6 +190,7 @@ def training(
                 tb_writer,
                 iteration,
                 loss_dict,
+                SDF_values,
                 l1_loss,
                 iter_start.elapsed_time(iter_end),
                 testing_iterations,
@@ -182,11 +199,30 @@ def training(
                 (pipe, background),
             )
             if iteration in saving_iterations:
+                extract_threshold = near_threshold
+                extract_mask = torch.logical_and(
+                    SDF_values >= -extract_threshold, SDF_values <= extract_threshold
+                )
+
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                gaussians.extract_by_mask(
+                    extract_mask,
+                    os.path.join(
+                        scene.model_path,
+                        "opacity/it_{}_{:.6f}.ply".format(
+                            iteration, torch.var(SDF_values)
+                        ),
+                    ),
+                )
+                print(
+                    "Keep ratio: {:.4f}".format(
+                        extract_mask.sum() / extract_mask.shape[0]
+                    )
+                )
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration < opt.densify_until_iter:  # TODO: prune by SDF?
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(
                     gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
@@ -257,6 +293,7 @@ def training_report(
     tb_writer,
     iteration,
     loss_dict,
+    sdf_values,
     l1_loss,
     elapsed,
     testing_iterations,
@@ -285,6 +322,9 @@ def training_report(
             tb_writer.add_histogram(
                 "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
             )
+
+    if iteration % 1000 == 0 and tb_writer:
+        tb_writer.add_histogram("scene/SDF_histogram", sdf_values, iteration)
 
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -366,7 +406,7 @@ if __name__ == "__main__":
         "--test_iterations", nargs="+", type=int, default=dense_test_iter
     )
     parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=[7_000, 30_000]
+        "--save_iterations", nargs="+", type=int, default=[3000, 7_000, 30_000]
     )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])

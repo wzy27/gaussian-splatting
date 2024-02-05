@@ -117,7 +117,7 @@ def training(
     octree.invradius = octree.invradius.to("cpu")
     octree._invalidate()
 
-    FLAGS = InitialFlags()
+    FLAGS = InitialFlags(dataset.source_path)
 
     octree_vis_dir = osp.splitext(FLAGS.input)[0] + "_render"
     os.makedirs(octree_vis_dir, exist_ok=True)
@@ -176,10 +176,17 @@ def training(
     iter_start = torch.cuda.Event(enable_timing=True)
     iter_end = torch.cuda.Event(enable_timing=True)
 
+    for idx in range(args.epochs):
+        saving_iterations.append(opt.iterations * (idx + 1))
+        for cut in range(1, 11):
+            testing_iterations.append(opt.iterations * idx + cut * opt.iterations // 10)
+
     first_iter = 0
     viewpoint_stack = None
     ema_loss_for_log = 0.0
     first_iter += 1
+
+    opaque_threshold = 0.6
 
     for epoch in range(first_epoch, args.epochs + 1):
         # Gaussian Training part
@@ -189,10 +196,6 @@ def training(
         for iteration in range(first_iter, first_iter + opt.iterations + 1):
             iter_start.record()
             gaussians.update_learning_rate(iteration)
-
-            # Every 1000 its we increase the levels of SH up to a maximum degree
-            if iteration % 1000 == 0:
-                gaussians.oneupSHdegree()
 
             # Pick a random Camera
             if not viewpoint_stack:
@@ -215,25 +218,25 @@ def training(
 
             loss_dict = {}
             tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
-            SDF_values = octree.querySDFfromTree(tree_coords)
-            # # Loss
+            # inner - negative, outer - positive
+            SDF_values = torch.from_numpy(octree.querySDFfromTree(tree_coords)).cuda()
+            # # Loss TODO: increase as traning proceeds
             # geometry loss - density to SDF
-            opacity_density_scaler = (
-                5.0  # TODO: adjust this, change to VolSDF function?
-            )
+            opacity_density_scaler = 5.0
             estimated_opacity = 4 * logistic_sigmoid(
-                torch.from_numpy(SDF_values).cuda(), opacity_density_scaler
+                SDF_values, opacity_density_scaler
             ).unsqueeze(-1)
+            truncated_opacity = torch.where(SDF_values < -0.1, 0.0, 1.0).unsqueeze(-1)
+            estimated_opacity = torch.min(estimated_opacity, truncated_opacity)
+
             loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
             loss_dict["opacity_loss"] = loss_opacity_l2
-            # loss_opacity_l2 = lambda_opacity = 0
 
             # scale loss - smallest scale near 0/some threshold?
             loss_scale = torch.mean(gaussians.get_scaling.min(axis=-1).values)
             loss_dict["scale_loss"] = loss_scale
-            # loss_scale = lambda_scale = 0
 
-            # TODO: orientation loss - smallest scale direction with SDF direction
+            # orientation loss - smallest scale direction with SDF direction
             gaussian_orientation = (
                 gaussians.get_normal().squeeze()
             )  # (N, 3), normalized
@@ -245,11 +248,6 @@ def training(
             )
             loss_orientation = 1 - torch.mean(similarity)
             loss_dict["orientation_loss"] = loss_orientation
-            # loss_orientation = lambda_orientation = 0
-
-            # points near surface loss - SDF near 0
-            # loss_point_cloud = torch.mean(SDF_values)
-            # lambda_point_cloud = 0.1
 
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -294,6 +292,12 @@ def training(
                 if iteration in saving_iterations:
                     print("\n[ITER {}] Saving Gaussians".format(iteration))
                     scene.save(iteration)
+                    gaussians.extract_opaque_points(
+                        opaque_threshold,
+                        os.path.join(
+                            dataset.model_path, "filter/iter_{}.ply".format(iteration)
+                        ),
+                    )
 
                 # Densification
                 if iteration < opt.densify_until_iter:
@@ -326,16 +330,11 @@ def training(
                         gaussians.reset_opacity()
 
                 # Optimizer step
-                if iteration < opt.iterations:
+                if iteration < args.epochs * opt.iterations:
                     gaussians.optimizer.step()
                     gaussians.optimizer.zero_grad(set_to_none=True)
 
-                if iteration in checkpoint_iterations:
-                    print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                    torch.save(
-                        (gaussians.capture(), iteration),
-                        scene.model_path + "/chkpnt" + str(iteration) + ".pth",
-                    )
+        first_iter += opt.iterations
 
         # Octree Training part
         epoch_id += 1
@@ -349,7 +348,16 @@ def training(
             enumerate(range(0, epoch_size, FLAGS.batch_size)), total=batches_per_epoch
         )
 
+        # opaque_points = gaussians.get_xyz_by_opacity(threshold=0.6).cpu().detach()
+        SDF_threshold = 0.1
         tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
+        SDF_values = octree.querySDFfromTree(tree_coords)
+        small_SDF_mask = abs(SDF_values) < SDF_threshold
+        gaussians.extract_by_mask(
+            small_SDF_mask,
+            os.path.join(dataset.model_path, "small_SDF/iter_{}.ply".format(iteration)),
+        )
+        tree_coords = tree_coords[small_SDF_mask].contiguous()
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
 
@@ -369,13 +377,16 @@ def training(
             rays = Rays(batch_origins, batch_dirs)
 
             im, gsc_loss = octree.VolumeRenderGaussCorr(
-                rays, im_gt, tree_coords.contiguous(), scale=1.0
+                rays,
+                im_gt,
+                tree_coords,
+                scale=0.01,  # TODO: adjust lambda here
             )
 
             mse = ((im - im_gt) ** 2).mean()
-
             psnr = -10.0 * np.log(mse.detach().cpu()) / np.log(10.0)
-            # tpsnr += psnr.item()
+
+            # EMA_PSNR = 0.99 * EMA_PSNR + 0.01 * psnr
 
             if iter_id % 100 == 0:
                 pbar.set_postfix(
@@ -394,10 +405,10 @@ def training(
                 octree.Beta.data[0] = 1.0 / ((gstep_id - 4.0 * 12800) / 300.0 + 200.0)
 
         octree.ExtractGeometry(
-            1024,
+            512,
             bbox_corner,
             bbox_length,
-            FLAGS.data_dir1,
+            dataset.model_path,
             iter_step=gstep_id,
         )
 
@@ -455,20 +466,12 @@ def training_report(
             "total_points", scene.gaussians.get_xyz.shape[0], iteration
         )
 
-    if iteration % 1000 == 0 and iteration < 5000:
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
-
-    if iteration % 3000 == 0 and iteration >= 5000:
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
-
     # Report test and samples of training set
     if iteration in testing_iterations:
+        if tb_writer:
+            tb_writer.add_histogram(
+                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
+            )
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
@@ -529,31 +532,20 @@ def training_report(
 
 
 if __name__ == "__main__":
-    dense_test_iter = [7000, 30000]
-    for i in range(0, 5000, 400):
-        dense_test_iter.append(i)
-    dense_test_iter.sort()
-
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument("--ip", type=str, default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=6009)
     parser.add_argument("--debug_from", type=int, default=-1)
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
-    parser.add_argument(
-        "--test_iterations", nargs="+", type=int, default=dense_test_iter
-    )
-    parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=[7_000, 30_000]
-    )
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
     args = parser.parse_args(sys.argv[1:])
-    args.save_iterations.append(args.iterations)
+    # args.save_iterations.append(args.iterations)
 
     print("Optimizing " + args.model_path)
 
