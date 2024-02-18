@@ -56,17 +56,18 @@ def training(
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
 
-    octree = LOctreeA.LOTLoad(
-        path=os.path.join(dataset.source_path, "LOT_new_table_512.npz"),
-        path_d=None,
-        load_full=False,
-        load_dict=False,
-        device="cuda",
-        dtype=torch.float32,
-    )
-    octree.offset = octree.offset.to("cpu")
-    octree.invradius = octree.invradius.to("cpu")
-    octree._invalidate()
+    # octree = LOctreeA.LOTLoad(
+    #     path=os.path.join(dataset.source_path, "LOT_new_table_512.npz"),
+    #     path_d=None,
+    #     load_full=False,
+    #     load_dict=False,
+    #     device="cuda",
+    #     dtype=torch.float32,
+    # )
+    # octree.offset = octree.offset.to("cpu")
+    # octree.invradius = octree.invradius.to("cpu")
+    # octree._invalidate()
+    octree = None
 
     scene = Scene(dataset, gaussians, octree)
     gaussians.training_setup(opt)
@@ -311,20 +312,11 @@ def training_report(
             "total_points", scene.gaussians.get_xyz.shape[0], iteration
         )
 
-    if iteration % 1000 == 0 and iteration < 5000:
-        if tb_writer:
+        if iteration % 3000 == 0:
             tb_writer.add_histogram(
                 "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
             )
-
-    if iteration % 3000 == 0 and iteration >= 5000:
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
-
-    if iteration % 1000 == 0 and tb_writer:
-        tb_writer.add_histogram("scene/SDF_histogram", sdf_values, iteration)
+            tb_writer.add_histogram("scene/SDF_histogram", sdf_values, iteration)
 
     # Report test and samples of training set
     if iteration in testing_iterations:

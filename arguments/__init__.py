@@ -61,9 +61,14 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+
         self.lambda_opacity = 10
         self.lambda_scale = 100
         self.lambda_orientation = 1
+
+        self.gaussian_smooth = False
+        self.hessian_eikonal = False
+        self.gauss_splat_corr = True
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

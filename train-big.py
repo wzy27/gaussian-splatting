@@ -90,8 +90,6 @@ def training(
     pipe,
     testing_iterations,
     saving_iterations,
-    checkpoint_iterations,
-    checkpoint,
     debug_from,
 ):
     tb_writer = prepare_output_and_logger(dataset)
@@ -105,11 +103,13 @@ def training(
     #########################################################################################
     device = "cuda"  # "cuda" if torch.cuda.is_available() else "cpu"
 
+    instance = os.path.basename(dataset.source_path)
+    pretrain_dir = "/data/nglm005/zhengyu.wen/pretrain"
     octree = LOctreeA.LOTLoad(
-        path=os.path.join(dataset.source_path, "LOT_new_table_512.npz"),
-        path_d=None,
-        load_full=False,
-        load_dict=False,
+        path=os.path.join(pretrain_dir, "SDF_512_{}.npz".format(instance)),
+        path_d=os.path.join(pretrain_dir, "dict_512_{}.npy".format(instance)),
+        load_full=True,
+        load_dict=True,
         device=device,
         dtype=torch.float32,
     )
@@ -178,15 +178,14 @@ def training(
 
     for idx in range(args.epochs):
         saving_iterations.append(opt.iterations * (idx + 1))
-        for cut in range(1, 11):
-            testing_iterations.append(opt.iterations * idx + cut * opt.iterations // 10)
+        for cut in range(1, 4):
+            testing_iterations.append(opt.iterations * idx + cut * opt.iterations // 3)
 
     first_iter = 0
     viewpoint_stack = None
     ema_loss_for_log = 0.0
     first_iter += 1
-
-    opaque_threshold = 0.6
+    EMA_PSNR = 20.0
 
     for epoch in range(first_epoch, args.epochs + 1):
         # Gaussian Training part
@@ -222,11 +221,16 @@ def training(
             SDF_values = torch.from_numpy(octree.querySDFfromTree(tree_coords)).cuda()
             # # Loss TODO: increase as traning proceeds
             # geometry loss - density to SDF
+            near_threshold = 0.1
+            near_mask = torch.logical_or(
+                SDF_values < -near_threshold, SDF_values > near_threshold
+            )
+
             opacity_density_scaler = 5.0
             estimated_opacity = 4 * logistic_sigmoid(
                 SDF_values, opacity_density_scaler
             ).unsqueeze(-1)
-            truncated_opacity = torch.where(SDF_values < -0.1, 0.0, 1.0).unsqueeze(-1)
+            truncated_opacity = torch.where(near_mask, 0.0, 1.0).unsqueeze(-1)
             estimated_opacity = torch.min(estimated_opacity, truncated_opacity)
 
             loss_opacity_l2 = l2_loss(gaussians.get_opacity, estimated_opacity)
@@ -290,13 +294,27 @@ def training(
                     (pipe, background),
                 )
                 if iteration in saving_iterations:
+                    extract_threshold = near_threshold
+                    extract_mask = torch.logical_and(
+                        SDF_values >= -extract_threshold,
+                        SDF_values <= extract_threshold,
+                    )
+
                     print("\n[ITER {}] Saving Gaussians".format(iteration))
                     scene.save(iteration)
-                    gaussians.extract_opaque_points(
-                        opaque_threshold,
+                    gaussians.extract_by_mask(
+                        extract_mask,
                         os.path.join(
-                            dataset.model_path, "filter/iter_{}.ply".format(iteration)
+                            scene.model_path,
+                            "opacity/it_{}_{:.6f}.ply".format(
+                                iteration, torch.var(SDF_values)
+                            ),
                         ),
+                    )
+                    print(
+                        "Keep ratio: {:.4f}".format(
+                            extract_mask.sum() / extract_mask.shape[0]
+                        )
                     )
 
                 # Densification
@@ -348,16 +366,26 @@ def training(
             enumerate(range(0, epoch_size, FLAGS.batch_size)), total=batches_per_epoch
         )
 
-        # opaque_points = gaussians.get_xyz_by_opacity(threshold=0.6).cpu().detach()
-        SDF_threshold = 0.1
-        tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
-        SDF_values = octree.querySDFfromTree(tree_coords)
-        small_SDF_mask = abs(SDF_values) < SDF_threshold
-        gaussians.extract_by_mask(
-            small_SDF_mask,
-            os.path.join(dataset.model_path, "small_SDF/iter_{}.ply".format(iteration)),
+        extract_threshold = near_threshold
+        extract_mask = torch.logical_and(
+            SDF_values >= -extract_threshold,
+            SDF_values <= extract_threshold,
         )
-        tree_coords = tree_coords[small_SDF_mask].contiguous()
+
+        tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
+        tree_coords = tree_coords[extract_mask].contiguous()
+
+        if dataset.hessian_eikonal:
+            print("Begin gaussian sampling for hessian")
+
+            gaussian_sigma = 0.3
+            max_n_samples = 256
+            octree.SampleGaussianPoints(
+                gaussian_sigma=gaussian_sigma, max_n_samples=max_n_samples
+            )
+
+            octree.opt.hess_step = 0.0019
+
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
 
@@ -369,32 +397,74 @@ def training(
             lr_sh = lr_sh_func(gstep_id)
             lr_sdf = lr_sdf_func(gstep_id)
 
-            if epoch_id >= 6:
-                lr_sdf = 5e-5
+            # if epoch_id >= 6:
+            #     lr_sdf = 5e-5
 
             im_gt = dset_train.rays.gt[batch_begin:batch_end]
 
             rays = Rays(batch_origins, batch_dirs)
 
-            im, gsc_loss = octree.VolumeRenderGaussCorr(
+            scale_gauss = 2e-4
+            sparse_frac_gauss_smooth = 0.1
+            im, gauss_smooth_loss = octree.VolumeRenderWOGaussVolSDF(
                 rays,
                 im_gt,
-                tree_coords,
-                scale=0.01,  # TODO: adjust lambda here
+                scale=scale_gauss,
+                ksize_grad=3,
+                sparse_frac=sparse_frac_gauss_smooth,
+                gauss_grad_loss=dataset.gaussian_smooth,
             )
+
+            if dataset.hessian_eikonal:
+                scale_hess = 1e-10
+                scale_eiko = 1e-5
+                sparse_frac_hess_eiko = 0.05
+                (
+                    hessian_loss,
+                    eikonal_loss,
+                    _,
+                    _,
+                    _,
+                ) = octree.VolumePointsHessEikon(
+                    hessian_on=True,
+                    eikonal_on=True,
+                    sclae_h=scale_hess,
+                    scale_e=scale_eiko,
+                    eikon_thres_min=0.8,
+                    eikon_thres_max=1.5,
+                    sparse_frac=sparse_frac_hess_eiko,
+                )
+
+            if dataset.gauss_splat_corr:
+                scale_gsc = 0.1
+                gsc_loss = octree.VolumeRenderGaussCorr(tree_coords, scale_gsc)
 
             mse = ((im - im_gt) ** 2).mean()
             psnr = -10.0 * np.log(mse.detach().cpu()) / np.log(10.0)
-
-            # EMA_PSNR = 0.99 * EMA_PSNR + 0.01 * psnr
+            EMA_PSNR = 0.99 * EMA_PSNR + 0.01 * psnr
 
             if iter_id % 100 == 0:
-                pbar.set_postfix(
-                    {"PSNR": f"{psnr:.{2}f}", "GSC loss": f"{gsc_loss:.{4}f}"}
-                )
-            # print("octree_step: ", gstep_id)
-            # print("PSNR: ", psnr)
-            # print("gsc loss: ", gsc_loss)
+                if dataset.gaussian_smooth:
+                    pbar.set_postfix(
+                        {
+                            # "PSNR": f"{EMA_PSNR:.{2}f}",
+                            "Gauss Smooth Loss": f"{gauss_smooth_loss:.{4}f}",
+                        }
+                    )
+
+                if dataset.hessian_eikonal:
+                    pbar.set_postfix(
+                        {
+                            # "PSNR": f"{psnr:.{2}f}",
+                            "Hessian Loss": f"{hessian_loss:.{4}f}",
+                            "Eikonal Loss": f"{eikonal_loss:.{4}f}",
+                        }
+                    )
+
+                if dataset.gauss_splat_corr:
+                    pbar.set_postfix(
+                        {"PSNR": f"{EMA_PSNR:.{2}f}", "GSC Loss": f"{gsc_loss:.{4}f}"}
+                    )
 
             octree.OptimSDF(lr_sdf, beta=0.95)
             octree.OptimSH(lr_sh, beta=0.95)
@@ -409,7 +479,7 @@ def training(
             bbox_corner,
             bbox_length,
             dataset.model_path,
-            iter_step=gstep_id,
+            iter_step=gstep_id + 1,
         )
 
         tree_image_eval(octree, dset_test, 3, octree_vis_dir, device)
@@ -559,8 +629,6 @@ if __name__ == "__main__":
         pp.extract(args),
         args.test_iterations,
         args.save_iterations,
-        args.checkpoint_iterations,
-        args.start_checkpoint,
         args.debug_from,
     )
 
