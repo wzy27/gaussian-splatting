@@ -326,15 +326,22 @@ def readNerfSyntheticInfo(path, white_background, eval, octree=None, extension="
 
     ply_path = os.path.join(path, "points3d.ply")
 
-    if not os.path.exists(ply_path):
+    # if not os.path.exists(ply_path):
+    #     num_pts = 100_000
+    #     initRandomPointCloud(num_pts, ply_path)
+
         # baseMesh_path = os.path.join(path, "base_mesh.ply")
-        baseMesh_path = path + "/meshes/00666666.ply"
-        if not os.path.exists(baseMesh_path):
-            num_pts = 100_000
-            initRandomPointCloud(num_pts, ply_path)
-        else:
-            print("Init from base mesh ...")
-            initFromBaseMesh(baseMesh_path, ply_path)
+        # baseMesh_path = path + "/meshes/00666666.ply"
+        # if not os.path.exists(baseMesh_path):
+        #     num_pts = 100_000
+        #     initRandomPointCloud(num_pts, ply_path)
+        # else:
+        #     print("Init from base mesh ...")
+        #     initFromBaseMesh(baseMesh_path, ply_path)
+
+    num_pts = 100_000
+    initRandomPointCloud(num_pts, ply_path)
+
     try:
         pcd = fetchPly(ply_path)
     except:

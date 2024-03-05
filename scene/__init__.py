@@ -125,6 +125,16 @@ class Scene:
         )
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
 
+    def defined_save(self, path, iteration):
+        self.gaussians.save_ply(
+            os.path.join(path, "base_iter_{}.ply".format(iteration))
+        )
+
+    def octree_save(self, path, iteration):
+        self.gaussians.save_ply(
+            os.path.join(path, "octree_iter_{}.ply".format(iteration))
+        )
+
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]
 

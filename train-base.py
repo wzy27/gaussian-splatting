@@ -120,10 +120,12 @@ def training(
                 scene,
                 render,
                 (pipe, background),
+                opt.iterations,
+                dataset,
             )
             if iteration in saving_iterations:
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
+                scene.defined_save(dataset.source_path, iteration)
 
             # Densification
             if iteration < opt.densify_until_iter:
@@ -163,7 +165,7 @@ def training(
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save(
                     (gaussians.capture(), iteration),
-                    scene.model_path + "/chkpnt" + str(iteration) + ".pth",
+                    dataset.source_path + "/chkpnt" + str(iteration) + ".pth",
                 )
 
 
@@ -172,11 +174,6 @@ from datetime import datetime
 
 def prepare_output_and_logger(args):
     if not args.model_path:
-        if os.getenv("OAR_JOB_ID"):
-            unique_str = os.getenv("OAR_JOB_ID")
-        else:
-            unique_str = str(uuid.uuid4())
-        # args.model_path = os.path.join("./output/", unique_str[0:10])
         args.model_path = os.path.join(
             "./output/", datetime.now().strftime("%m-%d-%H:%M:%S")
         )
@@ -207,6 +204,8 @@ def training_report(
     scene: Scene,
     renderFunc,
     renderArgs,
+    final_iter,
+    dataset,
 ):
     if tb_writer:
         tb_writer.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
@@ -216,14 +215,7 @@ def training_report(
             "total_points", scene.gaussians.get_xyz.shape[0], iteration
         )
 
-    if iteration % 1000 == 0 and iteration < 5000:
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
-
-    if iteration % 3000 == 0 and iteration >= 5000:
-        if tb_writer:
+        if iteration % 3000 == 0:
             tb_writer.add_histogram(
                 "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
             )
@@ -278,6 +270,17 @@ def training_report(
                         iteration, config["name"], l1_test, psnr_test
                     )
                 )
+
+                if iteration == final_iter and config["name"] == "test":
+                    with open(
+                        os.path.join(dataset.source_path, "result-base.txt"), "w+"
+                    ) as f:
+                        f.write("iterations: {}\n".format(iteration))
+                        f.write("PSNR: {:.2f}\n".format(psnr_test))
+                        f.write(
+                            "#points: {}\n".format(scene.gaussians.get_xyz.shape[0])
+                        )
+
                 if tb_writer:
                     tb_writer.add_scalar(
                         config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration
@@ -294,8 +297,8 @@ def training_report(
 
 if __name__ == "__main__":
 
-    dense_test_iter = [7000, 15000]
-    for i in range(0, 7000, 1000):
+    dense_test_iter = [15000]
+    for i in range(0, 22500, 5000):
         dense_test_iter.append(i)
     dense_test_iter.sort()
 

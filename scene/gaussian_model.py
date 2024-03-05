@@ -378,10 +378,6 @@ class GaussianModel:
 
         self.active_sh_degree = self.max_sh_degree
 
-        # TODO: remove when running normal exps!
-        self._old_xyz = self._xyz.clone().detach()
-        self._old_rotation = self._rotation.clone().detach()
-
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:

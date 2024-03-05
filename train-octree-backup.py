@@ -25,11 +25,12 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 
+# import mesh_to_sdf
+import trimesh
+import subprocess
 import numpy as np
 from datetime import datetime
 import time
-
-from pathlib import Path
 
 from LOctree import LOctreeA
 
@@ -55,10 +56,8 @@ def training(
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
 
-    model_name = Path(dataset.source_path).stem
-
     octree = LOctreeA.LOTLoad(
-        path=os.path.join(dataset.source_path, "SDF_512_{}.npz".format(model_name)),
+        path="/data/nglm005/zhengyu.wen/pretrain/SDF_128_lego.npz",
         path_d=None,
         load_full=False,
         load_dict=False,
@@ -68,6 +67,22 @@ def training(
     octree.offset = octree.offset.to("cpu")
     octree.invradius = octree.invradius.to("cpu")
     octree._invalidate()
+    # octree = None
+
+    radius = 0.5 / octree.invradius
+    center = (1 - 2.0 * octree.offset) * radius
+    bbox_corner = center - radius
+    bbox_corner.cuda()
+    bbox_length = radius * 2
+    bbox_length.cuda()
+
+    # octree.ExtractGeometry(
+    #     512,
+    #     bbox_corner,
+    #     bbox_length,
+    #     dataset.model_path,
+    #     iter_step=90000,
+    # )
 
     scene = Scene(dataset, gaussians, octree)
     gaussians.training_setup(opt)
@@ -87,6 +102,7 @@ def training(
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
+        # s1 = time.time()
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
@@ -112,9 +128,11 @@ def training(
             render_pkg["radii"],
         )
 
+        # s2 = time.time()
         loss_dict = {}
         tree_coords = octree.world2tree(gaussians.get_xyz.cpu().detach()).to("cuda")
         SDF_values = torch.from_numpy(octree.querySDFfromTree(tree_coords)).cuda()
+        # s3 = time.time()
         # # Loss
         # geometry loss - density to SDF
         near_threshold = 0.1
@@ -136,7 +154,7 @@ def training(
         loss_scale = torch.mean(gaussians.get_scaling.min(axis=-1).values)
         loss_dict["scale_loss"] = loss_scale
 
-        # orientation loss - smallest scale direction with SDF direction
+        # TODO: orientation loss - smallest scale direction with SDF direction
         gaussian_orientation = gaussians.get_normal().squeeze()  # (N, 3), normalized
         SDF_orientation = F.normalize(
             octree.queryNormalFromTree(tree_coords)
@@ -160,6 +178,8 @@ def training(
         )
         loss_dict["total_loss"] = loss
 
+        # s4 = time.time()
+        # print("time: {}, {}, {}".format(s2 - s1, s3 - s1, s4 - s1))
         loss.backward()
 
         iter_end.record()
@@ -173,9 +193,8 @@ def training(
                 progress_bar.set_postfix(
                     {
                         "Loss": f"{ema_loss_for_log:.{7}f}",
-                        # "SDF_avg": f"{SDF_avg:.{7}f}",
-                        # "SDF_var": f"{SDF_var:.{7}f}",
-                        "#points": gaussians.get_xyz.shape[0],
+                        "SDF_avg": f"{SDF_avg:.{7}f}",
+                        "SDF_var": f"{SDF_var:.{7}f}",
                     }
                 )
                 progress_bar.update(10)
@@ -194,40 +213,32 @@ def training(
                 scene,
                 render,
                 (pipe, background),
-                opt.iterations,
-                dataset,
             )
             if iteration in saving_iterations:
-                # extract_threshold = near_threshold
-                # extract_mask = torch.logical_and(
-                #     SDF_values >= -extract_threshold, SDF_values <= extract_threshold
-                # )
+                extract_threshold = near_threshold
+                extract_mask = torch.logical_and(
+                    SDF_values >= -extract_threshold, SDF_values <= extract_threshold
+                )
 
-                # print("\n[ITER {}] Saving Gaussians".format(iteration))
-                # scene.save(iteration)
-                # gaussians.extract_by_mask(
-                #     extract_mask,
-                #     os.path.join(
-                #         dataset.source_path,
-                #         "opacity/it_{}.ply".format(iteration),
-                #     ),
-                # )
-                # print(
-                #     "Keep ratio: {:.4f}".format(
-                #         extract_mask.sum() / extract_mask.shape[0]
-                #     )
-                # )
-
-                if iteration in saving_iterations:
-                    print("\n[ITER {}] Saving Gaussians".format(iteration))
-                    scene.octree_save(dataset.source_path, iteration)
-
-                # with open(os.path.join(dataset.source_path, "result.txt"), "w+") as f:
-                #     f.write("PSNR: {:.2f}\n".format())
-                #     f.write("#points: {}".format(gaussians.get_xyz.shape[0]))
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
+                gaussians.extract_by_mask(
+                    extract_mask,
+                    os.path.join(
+                        scene.model_path,
+                        "opacity/it_{}_{:.6f}.ply".format(
+                            iteration, torch.var(SDF_values)
+                        ),
+                    ),
+                )
+                print(
+                    "Keep ratio: {:.4f}".format(
+                        extract_mask.sum() / extract_mask.shape[0]
+                    )
+                )
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration < opt.densify_until_iter:  # TODO: prune by SDF?
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(
                     gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
@@ -270,6 +281,11 @@ def training(
 
 def prepare_output_and_logger(args):
     if not args.model_path:
+        if os.getenv("OAR_JOB_ID"):
+            unique_str = os.getenv("OAR_JOB_ID")
+        else:
+            unique_str = str(uuid.uuid4())
+        # args.model_path = os.path.join("./output/", unique_str[0:10])
         args.model_path = os.path.join(
             "./output/", datetime.now().strftime("%m-%d-%H:%M:%S")
         )
@@ -300,8 +316,6 @@ def training_report(
     scene: Scene,
     renderFunc,
     renderArgs,
-    final_iter,
-    dataset,
 ):
     if tb_writer:
         for name, value in loss_dict.items():
@@ -369,17 +383,6 @@ def training_report(
                         iteration, config["name"], l1_test, psnr_test
                     )
                 )
-
-                if iteration == final_iter and config["name"] == "test":
-                    with open(
-                        os.path.join(dataset.source_path, "result-octree.txt"), "w+"
-                    ) as f:
-                        f.write("iterations: {}\n".format(iteration))
-                        f.write("PSNR: {:.2f}\n".format(psnr_test))
-                        f.write(
-                            "#points: {}\n".format(scene.gaussians.get_xyz.shape[0])
-                        )
-
                 if tb_writer:
                     tb_writer.add_scalar(
                         config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration
@@ -392,8 +395,8 @@ def training_report(
 
 
 if __name__ == "__main__":
-    dense_test_iter = [15000]
-    for i in range(0, 15000, 1000):
+    dense_test_iter = [7000, 15000]
+    for i in range(0, 7000, 1000):
         dense_test_iter.append(i)
     dense_test_iter.sort()
 
