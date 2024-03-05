@@ -103,7 +103,7 @@ def OctreeSDFOpt(
 
     print("LOTreeA load")
 
-    c_path = os.path.join(root_path, model_name)
+    c_path = root_path + "/" + model_name
 
     train_at_beginning = train_at_beginning
     train_with_gsp = train_with_gsp
@@ -392,7 +392,7 @@ def OctreeSDFOpt(
                     print("gsc loss: ", gsc_loss)
 
                 if epoch_id < 6:
-                    if epoch_id < 1:
+                    if epoch_id < 2:
                         scaling_sh = 1e-3
                     elif epoch_id < 6:
                         scaling_sh = 1e-5
@@ -1106,24 +1106,16 @@ if __name__ == "__main__":
     root_path = "/data/nglm005/zhengyu.wen/data/Omnizl"
     model_names = []
 
-    # model_names.append("table_002")
-    # model_names.append("table_009")
-    # model_names.append("table_017")
-    model_names.append("table_019")  #
-    model_names.append("table_020")
-    model_names.append("table_023")
-    model_names.append("table_026")
-    model_names.append("sofa005")
-    model_names.append("sofa006")
-    model_names.append("sofa007")
-    model_names.append("sofa009")
-    model_names.append("sofa010")
-    model_names.append("sofa011")
+    model_names.append("rice001")
+    model_names.append("rice002")
+    model_names.append("rice003")
+    model_names.append("rice006")
+    model_names.append("rice008")
 
     scale_init_laplas = []
     scale_init_hesses = []
     for i in range(len(model_names)):
-        if model_names[i] == "table_019":
+        if model_names[i] == "rice001":
             scale_init_laplas.append(1e-7)
             scale_init_hesses.append(1e-7)
         else:

@@ -11,3 +11,6 @@ pretrain
 data
 __pycache__
 *.zip
+mesh
+*.log
+*.ipynb

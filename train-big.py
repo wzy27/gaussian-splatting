@@ -108,7 +108,7 @@ def training(
     octree = LOctreeA.LOTLoad(
         path=os.path.join(pretrain_dir, "SDF_512_{}.npz".format(instance)),
         path_d=os.path.join(pretrain_dir, "dict_512_{}.npy".format(instance)),
-        load_full=True,
+        load_full=True if dataset.gaussian_smooth else False,
         load_dict=True,
         device=device,
         dtype=torch.float32,
@@ -167,6 +167,15 @@ def training(
     bbox_length.cuda()
     #########################################################################################
 
+    # octree.ExtractGeometry(
+    #     512,
+    #     bbox_corner,
+    #     bbox_length,
+    #     dataset.model_path,
+    #     iter_step=90000,
+    # )
+
+    octree = None
     scene = Scene(dataset, gaussians, octree)
     gaussians.training_setup(opt)
 
@@ -180,6 +189,8 @@ def training(
         saving_iterations.append(opt.iterations * (idx + 1))
         for cut in range(1, 4):
             testing_iterations.append(opt.iterations * idx + cut * opt.iterations // 3)
+    saving_iterations.append(opt.iterations * args.epochs + opt.final_iterations)
+    testing_iterations.append(opt.iterations * args.epochs + opt.final_iterations)
 
     first_iter = 0
     viewpoint_stack = None
@@ -237,21 +248,27 @@ def training(
             loss_dict["opacity_loss"] = loss_opacity_l2
 
             # scale loss - smallest scale near 0/some threshold?
-            loss_scale = torch.mean(gaussians.get_scaling.min(axis=-1).values)
-            loss_dict["scale_loss"] = loss_scale
+            if dataset.lambda_scale > 0:
+                loss_scale = torch.mean(gaussians.get_scaling.min(axis=-1).values)
+                loss_dict["scale_loss"] = loss_scale
+            else:
+                loss_scale = 0
 
             # orientation loss - smallest scale direction with SDF direction
-            gaussian_orientation = (
-                gaussians.get_normal().squeeze()
-            )  # (N, 3), normalized
-            SDF_orientation = F.normalize(
-                octree.queryNormalFromTree(tree_coords)
-            )  # (N, 3), manually normalized
-            similarity = torch.abs(
-                (gaussian_orientation * SDF_orientation).sum(axis=-1)
-            )
-            loss_orientation = 1 - torch.mean(similarity)
-            loss_dict["orientation_loss"] = loss_orientation
+            if dataset.lambda_opacity > 0:
+                gaussian_orientation = (
+                    gaussians.get_normal().squeeze()
+                )  # (N, 3), normalized
+                SDF_orientation = F.normalize(
+                    octree.queryNormalFromTree(tree_coords)
+                )  # (N, 3), manually normalized
+                similarity = torch.abs(
+                    (gaussian_orientation * SDF_orientation).sum(axis=-1)
+                )
+                loss_orientation = 1 - torch.mean(similarity)
+                loss_dict["orientation_loss"] = loss_orientation
+            else:
+                loss_orientation = 0
 
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -358,9 +375,9 @@ def training(
         epoch_id += 1
         dset_train.shuffle_rays()
 
-        epoch_size = dset_train.rays.origins.size(0)
+        epoch_size = dset_train.rays.origins.size(0) // 2  # total #rays used in a epoch
         batches_per_epoch = (epoch_size - 1) // FLAGS.batch_size + 1
-        gstep_id_base = epoch_id * batches_per_epoch
+        gstep_id_base = 76800 + batches_per_epoch * (epoch - 1)
 
         pbar = tqdm(
             enumerate(range(0, epoch_size, FLAGS.batch_size)), total=batches_per_epoch
@@ -378,13 +395,23 @@ def training(
         if dataset.hessian_eikonal:
             print("Begin gaussian sampling for hessian")
 
-            gaussian_sigma = 0.3
-            max_n_samples = 256
             octree.SampleGaussianPoints(
-                gaussian_sigma=gaussian_sigma, max_n_samples=max_n_samples
+                gaussian_sigma=0.1, max_n_samples=64, gauss_sampling=False
+            )
+            point_count = 1.5e6
+            sparse_frac_hess_eiko = point_count / float(
+                octree.GaussianSamplePoints.size(0)
             )
 
-            octree.opt.hess_step = 0.0019
+            octree.opt.hess_step = 1.0 / (2**9)
+
+            # gaussian_sigma = 0.3
+            # max_n_samples = 256
+            # octree.SampleGaussianPoints(
+            #     gaussian_sigma=gaussian_sigma, max_n_samples=max_n_samples
+            # )
+
+            # octree.opt.hess_step = 0.0019
 
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
@@ -404,7 +431,7 @@ def training(
 
             rays = Rays(batch_origins, batch_dirs)
 
-            scale_gauss = 2e-4
+            scale_gauss = 1  # TODO: gaussian smoother lambda
             sparse_frac_gauss_smooth = 0.1
             im, gauss_smooth_loss = octree.VolumeRenderWOGaussVolSDF(
                 rays,
@@ -416,9 +443,8 @@ def training(
             )
 
             if dataset.hessian_eikonal:
-                scale_hess = 1e-10
-                scale_eiko = 1e-5
-                sparse_frac_hess_eiko = 0.05
+                scale_hess = 1e-12
+                scale_eiko = 1e-6
                 (
                     hessian_loss,
                     eikonal_loss,
@@ -428,7 +454,7 @@ def training(
                 ) = octree.VolumePointsHessEikon(
                     hessian_on=True,
                     eikonal_on=True,
-                    sclae_h=scale_hess,
+                    scale_h=scale_hess,
                     scale_e=scale_eiko,
                     eikon_thres_min=0.8,
                     eikon_thres_max=1.5,
@@ -436,8 +462,11 @@ def training(
                 )
 
             if dataset.gauss_splat_corr:
-                scale_gsc = 0.1
-                gsc_loss = octree.VolumeRenderGaussCorr(tree_coords, scale_gsc)
+                scale_gsc = 0.3  # TODO: gaussian-SDF loss lambda
+                SDF_thre = -0.05  # avg inner scale of points
+                gsc_loss = octree.VolumeRenderGaussCorr(
+                    tree_coords, scale_gsc, SDF_thre
+                )
 
             mse = ((im - im_gt) ** 2).mean()
             psnr = -10.0 * np.log(mse.detach().cpu()) / np.log(10.0)
@@ -473,6 +502,7 @@ def training(
                 octree.Beta.data[0] = 1.0 / (gstep_id / 300.0 + 10.0)
             else:
                 octree.Beta.data[0] = 1.0 / ((gstep_id - 4.0 * 12800) / 300.0 + 200.0)
+                # octree.Beta.data[0] = 1.0 / ((gstep_id - 4.0 * epoch_size) / 300.0 + 200.0)
 
         octree.ExtractGeometry(
             512,
@@ -483,10 +513,118 @@ def training(
         )
 
         tree_image_eval(octree, dset_test, 3, octree_vis_dir, device)
-
         epoch_bar.update()
 
     pass
+
+    octree.LOTSave(
+        path=os.path.join(dataset.model_path, "SDF_iter_{}.npz".format(first_iter)),
+        path_d=os.path.join(dataset.model_path, "dict_iter_{}.npy".format(first_iter)),
+        out_full=True,
+    )
+
+    # final stage, add gaussians back
+    # Gaussian Training part
+    progress_bar = tqdm(
+        range(first_iter, first_iter + opt.final_iterations), desc="Training progress"
+    )
+    for iteration in range(first_iter, first_iter + opt.final_iterations + 1):
+        iter_start.record()
+        gaussians.update_learning_rate(iteration)
+
+        # Pick a random Camera
+        if not viewpoint_stack:
+            viewpoint_stack = scene.getTrainCameras().copy()
+        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
+
+        bg = torch.rand((3), device="cuda") if opt.random_background else background
+
+        render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
+        image, viewspace_point_tensor, visibility_filter, radii = (
+            render_pkg["render"],
+            render_pkg["viewspace_points"],
+            render_pkg["visibility_filter"],
+            render_pkg["radii"],
+        )
+
+        loss_dict = {}
+        gt_image = viewpoint_cam.original_image.cuda()
+        Ll1 = l1_loss(image, gt_image)
+        loss_dict["image_l1_loss"] = Ll1
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (
+            1.0 - ssim(image, gt_image)
+        )
+        loss_dict["total_loss"] = loss
+
+        loss.backward()
+
+        iter_end.record()
+
+        with torch.no_grad():
+            # Progress bar
+            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+            if iteration % 10 == 0:
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.update(10)
+            if iteration == opt.iterations:
+                progress_bar.close()
+
+            # Log and save
+            training_report(
+                tb_writer,
+                iteration,
+                loss_dict,
+                l1_loss,
+                iter_start.elapsed_time(iter_end),
+                testing_iterations,
+                scene,
+                render,
+                (pipe, background),
+            )
+            if iteration in saving_iterations:
+                extract_threshold = near_threshold
+                extract_mask = torch.logical_and(
+                    SDF_values >= -extract_threshold,
+                    SDF_values <= extract_threshold,
+                )
+
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
+
+            # Densification
+            if iteration < first_iter + 5000:
+                # Keep track of max radii in image-space for pruning
+                gaussians.max_radii2D[visibility_filter] = torch.max(
+                    gaussians.max_radii2D[visibility_filter],
+                    radii[visibility_filter],
+                )
+                gaussians.add_densification_stats(
+                    viewspace_point_tensor, visibility_filter
+                )
+
+                if (
+                    iteration > opt.densify_from_iter
+                    and iteration % opt.densification_interval == 0
+                ):
+                    size_threshold = (
+                        20 if iteration > opt.opacity_reset_interval else None
+                    )
+                    gaussians.densify_and_prune(
+                        opt.densify_grad_threshold,
+                        0.005,
+                        scene.cameras_extent,
+                        size_threshold,
+                    )
+
+                if iteration % opt.opacity_reset_interval == 0 or (
+                    dataset.white_background and iteration == opt.densify_from_iter
+                ):
+                    gaussians.reset_opacity()
+
+            # Optimizer step
+            if iteration < first_iter + opt.final_iterations:
+                gaussians.optimizer.step()
+                gaussians.optimizer.zero_grad(set_to_none=True)
 
 
 def prepare_output_and_logger(args):

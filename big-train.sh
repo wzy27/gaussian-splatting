@@ -1,11 +1,18 @@
-export CUDA_VISIBLE_DEVICES=4
-export PYTHONPATH=$PYTHONPATH:/home/nglm005/data/nglm005/zhengyu.wen/LOTree
+export CUDA_VISIBLE_DEVICES=6
+export PYTHONPATH=$PYTHONPATH:/data/nglm005/zhengyu.wen/LOTree-zhengyu
 
 python train-big.py --eval -s \
-    /home/nglm005/data/nglm005/zhengyu.wen/data/Omni/table024 \
+    /data/nglm005/zhengyu.wen/data/Omni/dino006 \
     --sh_degree 0 \
     --iterations 3000 \
-    --epochs 10
+    --epochs 10 \
+    --opacity_reset_interval 300 \
+    --lambda_orientation 0 \
+    --lambda_scale 0 \
+    --gaussian_smooth \
+    --densify_until_iter 30000
+
+    # --hessian_eikonal
 
 
 # tmux:29

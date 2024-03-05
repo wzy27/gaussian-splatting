@@ -103,7 +103,7 @@ def OctreeSDFOpt(
 
     print("LOTreeA load")
 
-    c_path = os.path.join(root_path, model_name)
+    c_path = root_path + "/" + model_name
 
     train_at_beginning = train_at_beginning
     train_with_gsp = train_with_gsp
@@ -1106,19 +1106,11 @@ if __name__ == "__main__":
     root_path = "/data/nglm005/zhengyu.wen/data/Omnizl"
     model_names = []
 
-    # model_names.append("table_002")
-    # model_names.append("table_009")
-    # model_names.append("table_017")
-    model_names.append("table_019")  #
-    model_names.append("table_020")
-    model_names.append("table_023")
-    model_names.append("table_026")
-    model_names.append("sofa005")
-    model_names.append("sofa006")
-    model_names.append("sofa007")
-    model_names.append("sofa009")
-    model_names.append("sofa010")
-    model_names.append("sofa011")
+    model_names.append("suitcase001")
+    model_names.append("suitcase002")
+    model_names.append("suitcase003")
+    model_names.append("suitcase004")
+    model_names.append("suitcase008")
 
     scale_init_laplas = []
     scale_init_hesses = []

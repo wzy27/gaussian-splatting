@@ -12,12 +12,11 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, l2_loss, ssim
+from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state, logistic_sigmoid
-from utils.system_utils import mkdir_p
+from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -62,7 +61,41 @@ def training(
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
+        if network_gui.conn == None:
+            network_gui.try_connect()
+        while network_gui.conn != None:
+            try:
+                net_image_bytes = None
+                (
+                    custom_cam,
+                    do_training,
+                    pipe.convert_SHs_python,
+                    pipe.compute_cov3D_python,
+                    keep_alive,
+                    scaling_modifer,
+                ) = network_gui.receive()
+                if custom_cam != None:
+                    net_image = render(
+                        custom_cam, gaussians, pipe, background, scaling_modifer
+                    )["render"]
+                    net_image_bytes = memoryview(
+                        (torch.clamp(net_image, min=0, max=1.0) * 255)
+                        .byte()
+                        .permute(1, 2, 0)
+                        .contiguous()
+                        .cpu()
+                        .numpy()
+                    )
+                network_gui.send(net_image_bytes, dataset.source_path)
+                if do_training and (
+                    (iteration < int(opt.iterations)) or not keep_alive
+                ):
+                    break
+            except Exception as e:
+                network_gui.conn = None
+
         iter_start.record()
+
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
@@ -94,7 +127,6 @@ def training(
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (
             1.0 - ssim(image, gt_image)
         )
-
         loss.backward()
 
         iter_end.record()
@@ -167,19 +199,13 @@ def training(
                 )
 
 
-from datetime import datetime
-
-
 def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv("OAR_JOB_ID"):
             unique_str = os.getenv("OAR_JOB_ID")
         else:
             unique_str = str(uuid.uuid4())
-        # args.model_path = os.path.join("./output/", unique_str[0:10])
-        args.model_path = os.path.join(
-            "./output/", datetime.now().strftime("%m-%d-%H:%M:%S")
-        )
+        args.model_path = os.path.join("./output/", unique_str[0:10])
 
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
@@ -212,21 +238,6 @@ def training_report(
         tb_writer.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
         tb_writer.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
         tb_writer.add_scalar("iter_time", elapsed, iteration)
-        tb_writer.add_scalar(
-            "total_points", scene.gaussians.get_xyz.shape[0], iteration
-        )
-
-    if iteration % 1000 == 0 and iteration < 5000:
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
-
-    if iteration % 3000 == 0 and iteration >= 5000:
-        if tb_writer:
-            tb_writer.add_histogram(
-                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
-            )
 
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -286,19 +297,17 @@ def training_report(
                         config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration
                     )
 
-        # if tb_writer:
-        # tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-        # tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
+        if tb_writer:
+            tb_writer.add_histogram(
+                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
+            )
+            tb_writer.add_scalar(
+                "total_points", scene.gaussians.get_xyz.shape[0], iteration
+            )
         torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
-
-    dense_test_iter = [7000, 15000]
-    for i in range(0, 7000, 1000):
-        dense_test_iter.append(i)
-    dense_test_iter.sort()
-
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
@@ -309,10 +318,10 @@ if __name__ == "__main__":
     parser.add_argument("--debug_from", type=int, default=-1)
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
     parser.add_argument(
-        "--test_iterations", nargs="+", type=int, default=dense_test_iter
+        "--test_iterations", nargs="+", type=int, default=[7_000, 30_000]
     )
     parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=dense_test_iter
+        "--save_iterations", nargs="+", type=int, default=[7_000, 30_000]
     )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])

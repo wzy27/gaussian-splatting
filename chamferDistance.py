@@ -1,9 +1,11 @@
 import argparse
 import sys
 import numpy as np
+import os
 
 # pip install trimesh[all]
 import trimesh
+from datetime import datetime
 
 
 def as_mesh(scene_or_mesh):
@@ -79,4 +81,13 @@ if __name__ == "__main__":
     ref = as_mesh(trimesh.load(args.target_path))
     dist_forward = get_chamfer_dist(mesh, ref)
 
+    file_name = os.path.basename(args.source_path)
+    time_str = datetime.now().strftime("%m-%d-%H:%M:%S")
+    log_path = "CD-test.log"
+    with open(log_path, "a") as f:
+        f.write(
+            "Time: {} File: {} CD: {:.6f}\n".format(
+                time_str, file_name, dist_forward["cd"]
+            )
+        )
     print("CD: ", dist_forward)

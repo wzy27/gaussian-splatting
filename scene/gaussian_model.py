@@ -14,6 +14,7 @@ import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import torch.nn.functional as f
+from scipy.spatial.transform import Rotation as R
 
 # import pyvoro
 
@@ -124,7 +125,7 @@ class GaussianModel:
             self.get_scaling, scaling_modifier, self._rotation
         )
 
-    def get_normal(self):  # TODO: fix bug here
+    def get_normal(self):
         rotation_matrix = build_rotation(self._rotation)
         min_scale_index = self.get_scaling.min(axis=1).indices
         normal_vec = (
@@ -171,6 +172,7 @@ class GaussianModel:
         )
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
+        # self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(False))
         self._features_dc = nn.Parameter(
             features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True)
         )
@@ -181,67 +183,6 @@ class GaussianModel:
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-
-    def random_init(self, pcd, point_cnt):
-        xyz = torch.tensor(np.asarray(pcd.points)).float()
-
-        upper = xyz.max(axis=0).values
-        lower = xyz.min(axis=0).values
-        xyz_rand = torch.rand(point_cnt, 3)
-        xyz_rand = xyz_rand * (upper - lower) + lower
-
-        opacities_rand = inverse_sigmoid(
-            0.1 * torch.ones((point_cnt, 1), dtype=torch.float, device="cuda")
-        )
-
-        features_dc_rand = torch.rand((point_cnt, 3, 1)) * 2 - 1
-        extra_len = 0
-        features_extra_rand = torch.rand((point_cnt, 3, extra_len)) * 2 - 1
-
-        scale_low = 1e-4
-        scale_high = 1
-        scales_rand = (
-            torch.rand(point_cnt) * (scale_high - scale_low) + scale_low
-        )  # TODO: better initialization
-
-        scales_rand = torch.log(torch.sqrt(scales_rand))[..., None].repeat(1, 3)
-
-        rots = torch.zeros((point_cnt, 4), device="cuda")
-        rots[:, 0] = 1
-
-        self._xyz = nn.Parameter(
-            torch.tensor(xyz_rand, dtype=torch.float, device="cuda").requires_grad_(
-                True
-            )
-        )
-        self._features_dc = nn.Parameter(
-            torch.tensor(features_dc_rand, dtype=torch.float, device="cuda")
-            .transpose(1, 2)
-            .contiguous()
-            .requires_grad_(True)
-        )
-        self._features_rest = nn.Parameter(
-            torch.tensor(features_extra_rand, dtype=torch.float, device="cuda")
-            .transpose(1, 2)
-            .contiguous()
-            .requires_grad_(True)
-        )
-        self._opacity = nn.Parameter(
-            torch.tensor(
-                opacities_rand, dtype=torch.float, device="cuda"
-            ).requires_grad_(True)
-        )
-        self._scaling = nn.Parameter(
-            torch.tensor(scales_rand, dtype=torch.float, device="cuda").requires_grad_(
-                True
-            )
-        )
-        self._rotation = nn.Parameter(
-            torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True)
-        )
-
-        # self.ancestor = torch.tensor(range(xyz.shape[0]), device="cuda")
-        self.max_radii2D = torch.zeros((point_cnt), dtype=torch.float, device="cuda")
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -436,6 +377,10 @@ class GaussianModel:
         )
 
         self.active_sh_degree = self.max_sh_degree
+
+        # TODO: remove when running normal exps!
+        self._old_xyz = self._xyz.clone().detach()
+        self._old_rotation = self._rotation.clone().detach()
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -649,17 +594,6 @@ class GaussianModel:
         )
         self.denom[update_filter] += 1
 
-    def extract_points_for_recon(
-        self, opacity_threshold, sdf_values, sdf_threshold, path
-    ):
-        # throw away too transparent/far points
-        transparent_mask = torch.where(
-            self.get_opacity.squeeze(-1) < opacity_threshold, True, False
-        )
-        sdf_mask = torch.where(torch.abs(sdf_values) > sdf_threshold, True, False)
-        filtered_mask = torch.logical_or(transparent_mask, sdf_mask)
-        self.extract_by_mask(filtered_mask, path)
-
     def extract_opaque_points(self, opacity_threshold, path):
         transparent_mask = torch.where(
             self.get_opacity.squeeze(-1) < opacity_threshold, True, False
@@ -708,3 +642,64 @@ class GaussianModel:
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, "vertex")
         PlyData([el]).write(path)
+
+    def apply_transform(self, matrix):
+        # Assume input n*4*4 matrix (useful n*4*3)
+
+        # get the world-to-camera transform and set R, T
+        # w2c = np.linalg.inv(c2w)
+        # R = np.transpose(
+        #     w2c[:3, :3]
+        # )  # R is stored transposed due to 'glm' in CUDA code
+        # T = w2c[:3, 3]
+
+        rotation = torch.transpose(matrix[:, :3, :3], 1, 2)
+        translation = matrix[:, 3, :3]
+        self._xyz = self._xyz.detach()
+        self._rotation = self._rotation.detach()
+
+        self._xyz += translation
+        rotation_matrix = build_rotation(self._rotation)
+        rotation_matrix = rotation_matrix @ rotation
+
+        rot = R.from_matrix(rotation_matrix.cpu())
+        new_rotation = torch.from_numpy(rot.as_quat())  # xyzw quaternion format
+
+        true_rotation = torch.concat(
+            (new_rotation[:, 3:], new_rotation[:, :3]), dim=1
+        ).float()  # wxyz quaternion format
+        self._rotation = true_rotation.cuda()
+        pass
+
+    def translate_by_mask(self, mask, new_xyz):
+        m = mask.unsqueeze(-1)
+        self._xyz = self._old_xyz * ~m + new_xyz * m
+
+    def translate_by_ply(self, path):
+        plydata = PlyData.read(path)
+        xyz = np.stack(
+            (
+                np.asarray(plydata.elements[0]["x"]),
+                np.asarray(plydata.elements[0]["y"]),
+                np.asarray(plydata.elements[0]["z"]),
+            ),
+            axis=1,
+        )
+        self._xyz = nn.Parameter(
+            torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(False)
+        )
+        self._old_xyz = self._xyz.clone().detach()
+
+    def rotation_fix(self, mask, matrix):
+        rotation_matrix = build_rotation(self._old_rotation)
+        rotation_matrix = rotation_matrix @ matrix
+
+        rot = R.from_matrix(rotation_matrix.cpu())
+        new_rotation = torch.from_numpy(rot.as_quat())  # xyzw quaternion format
+
+        true_rotation = torch.concat(
+            (new_rotation[:, 3:], new_rotation[:, :3]), dim=1
+        ).float()  # wxyz quaternion format
+
+        m = mask.unsqueeze(-1)
+        self._rotation = self._old_rotation * ~m + true_rotation.cuda() * m

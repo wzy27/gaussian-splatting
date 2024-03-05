@@ -236,6 +236,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
             c2w[:3, 1:3] *= -1
 
+            # TODO: add scene scale here, only for hessian!
+            scene_scale = 0.6
+            c2w[:3, 3] *= scene_scale
+
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
             R = np.transpose(
@@ -289,7 +293,19 @@ def initRandomPointCloud(num_pts, ply_path):
     )
 
     storePly(ply_path, xyz, SH2RGB(shs) * 255)
-    pass
+
+
+def initFromBaseMesh(path, ply_path):
+    plydata = PlyData.read(path)
+    vertices = plydata["vertex"]
+    num_pts = len(vertices)
+    positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
+    shs = np.random.random((num_pts, 3)) / 255.0
+    pcd = BasicPointCloud(
+        points=positions, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
+    )
+
+    storePly(ply_path, positions, SH2RGB(shs) * 255)
 
 
 def readNerfSyntheticInfo(path, white_background, eval, octree=None, extension=".png"):
@@ -310,17 +326,15 @@ def readNerfSyntheticInfo(path, white_background, eval, octree=None, extension="
 
     ply_path = os.path.join(path, "points3d.ply")
 
-    if octree is not None:
-        num_pts = 100_000
-        initRandomPointCloud(num_pts, ply_path)
-
     if not os.path.exists(ply_path):
-        if octree is not None:
-            pass
-        else:
-            # Since this data set has no colmap data, we start with random points
+        # baseMesh_path = os.path.join(path, "base_mesh.ply")
+        baseMesh_path = path + "/meshes/00666666.ply"
+        if not os.path.exists(baseMesh_path):
             num_pts = 100_000
             initRandomPointCloud(num_pts, ply_path)
+        else:
+            print("Init from base mesh ...")
+            initFromBaseMesh(baseMesh_path, ply_path)
     try:
         pcd = fetchPly(ply_path)
     except:

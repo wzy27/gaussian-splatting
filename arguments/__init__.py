@@ -62,9 +62,9 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
 
-        self.lambda_opacity = 10
-        self.lambda_scale = 100
-        self.lambda_orientation = 1
+        self.lambda_opacity = 10.0
+        self.lambda_scale = 100.0
+        self.lambda_orientation = 1.0
 
         self.gaussian_smooth = False
         self.hessian_eikonal = False
@@ -88,6 +88,7 @@ class PipelineParams(ParamGroup):
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 30_000
+        self.final_iterations = 5_000
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_delay_mult = 0.01
