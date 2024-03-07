@@ -27,37 +27,46 @@ def render_set(
     model_path, name, iteration, views, gaussians, pipeline, background, thre=0.05
 ):
 
-    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    # render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    # gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
-    # render_path = os.path.join(model_path, name, "upper_{:.2f}".format(thre), "renders")
-    # gts_path = os.path.join(model_path, name, "upper_{:.2f}".format(thre), "gt")
-
+    render_path = os.path.join(model_path, "render_base_{}_black".format(name))
+    gts_path = os.path.join(model_path, "gt_{}_black".format(name))
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
 
-    dup_views = []
-    for i in range(50):
-        for view in views:
-            dup_views.append(view)
-
-    total = 0.0
-    # TODO: add #rendering views
-    for idx, view in enumerate(tqdm(dup_views, desc="Rendering progress")):
-        start = time.time()
+    for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, gaussians, pipeline, background)["render"]
-        end = time.time()
-        total += end - start
-        # gt = view.original_image[0:3, :, :]
+        gt = view.original_image[0:3, :, :]
+        torchvision.utils.save_image(
+            rendering, os.path.join(render_path, "r_{}".format(idx) + ".png")
+        )
         # torchvision.utils.save_image(
-        #     rendering, os.path.join(render_path, "{0:05d}".format(idx) + ".png")
+        #     gt, os.path.join(gts_path, "r_{}".format(idx) + ".png")
         # )
-        # torchvision.utils.save_image(
-        #     gt, os.path.join(gts_path, "{0:05d}".format(idx) + ".png")
-        # )
-    FPS = len(dup_views) / total
-    print("#points: {}".format(gaussians.get_xyz.shape[0]))
-    print("#images: {} FPS: {:.2f}".format(len(dup_views), FPS))
+
+    # dup_views = []
+    # for i in range(50):
+    #     for view in views:
+    #         dup_views.append(view)
+
+    # total = 0.0
+    # # TODO: add #rendering views
+    # for idx, view in enumerate(tqdm(dup_views, desc="Rendering progress")):
+    #     start = time.time()
+    #     rendering = render(view, gaussians, pipeline, background)["render"]
+    #     end = time.time()
+    #     total += end - start
+    #     # gt = view.original_image[0:3, :, :]
+    #     # torchvision.utils.save_image(
+    #     #     rendering, os.path.join(render_path, "{0:05d}".format(idx) + ".png")
+    #     # )
+    #     # torchvision.utils.save_image(
+    #     #     gt, os.path.join(gts_path, "{0:05d}".format(idx) + ".png")
+    #     # )
+    # FPS = len(dup_views) / total
+    # print("#points: {}".format(gaussians.get_xyz.shape[0]))
+    # print("#images: {} FPS: {:.2f}".format(len(dup_views), FPS))
 
 
 def render_sets(
@@ -83,7 +92,7 @@ def render_sets(
 
         if not skip_train:
             render_set(
-                dataset.model_path,
+                dataset.source_path,
                 "train",
                 scene.loaded_iter,
                 scene.getTrainCameras(),
@@ -95,7 +104,7 @@ def render_sets(
 
         if not skip_test:
             render_set(
-                dataset.model_path,
+                dataset.source_path,
                 "test",
                 scene.loaded_iter,
                 scene.getTestCameras(),

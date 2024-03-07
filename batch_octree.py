@@ -13,7 +13,9 @@ for exp_dir in exp_dirs:
         if not os.path.exists(os.path.join(exp_dir, data_name, "result-octree.txt")):
             data_dirs.append(os.path.join(exp_dir, data_name))
 
-# print(data_dirs)
+data_dirs.sort()
+print(data_dirs)
+print(len(data_dirs))
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 os.environ["PYTHONPATH"] = "$PYTHONPATH:/data/nglm005/zhengyu.wen/LOTree-zhengyu"
@@ -21,7 +23,7 @@ print(os.environ["PYTHONPATH"])
 
 shell_command_prefix = "python train-octree.py --eval -s "
 shell_command_postfix = " --sh_degree 0 --iterations 15000 --save_iterations 15000 --checkpoint_iterations 15000 "
-shell_param = "--lambda_opacity 10 --lambda_orientation 1 --lambda_scale 1000"
+shell_param = "--lambda_opacity 3 --lambda_orientation 0.1 --lambda_scale 1 --opacity_reset_interval 300"
 
 for data_dir in data_dirs:
     command = shell_command_prefix + data_dir + shell_command_postfix + shell_param

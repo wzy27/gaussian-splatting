@@ -14,3 +14,4 @@ __pycache__
 mesh
 *.log
 *.ipynb
+*.json

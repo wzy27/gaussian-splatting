@@ -393,8 +393,8 @@ def training_report(
 
 if __name__ == "__main__":
     dense_test_iter = [15000]
-    for i in range(0, 15000, 1000):
-        dense_test_iter.append(i)
+    # for i in range(0, 15000, 1000):
+    #     dense_test_iter.append(i)
     dense_test_iter.sort()
 
     # Set up command line argument parser

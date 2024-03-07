@@ -105,7 +105,10 @@ class Scene:
                 scene_info.test_cameras, resolution_scale, args
             )
 
-        # self.gaussians.load_ply(os.path.join(self.model_path, "point_cloud", "iteration_7000", "upper_{th:.2f}".format(th=thre)))
+        # TODO: correct here when completing rendering!
+        # self.gaussians.load_ply(
+        #     os.path.join(os.path.dirname(scene_info.ply_path), "base_iter_15000.ply")
+        # )
 
         if self.loaded_iter:
             self.gaussians.load_ply(
