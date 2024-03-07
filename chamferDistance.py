@@ -2,10 +2,14 @@ import argparse
 import sys
 import numpy as np
 import os
+import json
+from pathlib import Path
 
 # pip install trimesh[all]
 import trimesh
 from datetime import datetime
+
+dirname = os.path.dirname
 
 
 def as_mesh(scene_or_mesh):
@@ -86,8 +90,15 @@ if __name__ == "__main__":
     log_path = "CD-test.log"
     with open(log_path, "a") as f:
         f.write(
-            "Time: {} File: {} CD: {:.6f}\n".format(
+            "Time:{} File:{} CD:{:.6f}\n".format(
                 time_str, file_name, dist_forward["cd"]
             )
         )
     print("CD: ", dist_forward)
+
+    with open("CD_done.json", "r") as done_file:
+        done_dict = json.load(done_file)
+    exp_name = Path(dirname(args.source_path)).stem
+    done_dict[exp_name] = dist_forward["cd"]
+    with open("CD_done.json", "w") as done_file:
+        json.dump(done_dict, done_file)
