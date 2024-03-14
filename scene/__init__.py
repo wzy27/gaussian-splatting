@@ -107,7 +107,7 @@ class Scene:
 
         # TODO: correct here when completing rendering!
         # self.gaussians.load_ply(
-        #     os.path.join(os.path.dirname(scene_info.ply_path), "base_iter_15000.ply")
+        #     os.path.join(os.path.dirname(scene_info.ply_path), "octree_15000_w.ply")
         # )
 
         if self.loaded_iter:
@@ -134,9 +134,7 @@ class Scene:
         )
 
     def octree_save(self, path, iteration):
-        self.gaussians.save_ply(
-            os.path.join(path, "octree_iter_{}.ply".format(iteration))
-        )
+        self.gaussians.save_ply(os.path.join(path, "octree_{}_w.ply".format(iteration)))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

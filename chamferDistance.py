@@ -78,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", type=int, default=10000)
     parser.add_argument("--source_path", "-s", required=True, type=str)
     parser.add_argument("--target_path", "-t", required=True, type=str)
+    parser.add_argument("--division", "-d", required=False, type=str)
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -96,9 +97,9 @@ if __name__ == "__main__":
         )
     print("CD: ", dist_forward)
 
-    with open("CD_done.json", "r") as done_file:
+    with open("CD_{}.json".format(args.division), "r") as done_file:
         done_dict = json.load(done_file)
     exp_name = Path(dirname(args.source_path)).stem
     done_dict[exp_name] = dist_forward["cd"]
-    with open("CD_done.json", "w") as done_file:
+    with open("CD_{}.json".format(args.division), "w") as done_file:
         json.dump(done_dict, done_file)

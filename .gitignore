@@ -15,3 +15,4 @@ mesh
 *.log
 *.ipynb
 *.json
+temp

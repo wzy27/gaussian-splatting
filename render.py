@@ -30,8 +30,8 @@ def render_set(
     # render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     # gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
-    render_path = os.path.join(model_path, "render_base_{}_black".format(name))
-    gts_path = os.path.join(model_path, "gt_{}_black".format(name))
+    render_path = os.path.join(model_path, "render_{}".format(name))
+    gts_path = os.path.join(model_path, "gt_{}".format(name))
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
 

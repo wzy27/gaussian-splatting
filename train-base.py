@@ -297,8 +297,8 @@ def training_report(
 
 if __name__ == "__main__":
 
-    dense_test_iter = [15000]
-    for i in range(0, 22500, 5000):
+    dense_test_iter = [30000]
+    for i in range(0, 30000, 5000):
         dense_test_iter.append(i)
     dense_test_iter.sort()
 

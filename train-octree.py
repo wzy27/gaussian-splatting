@@ -372,7 +372,7 @@ def training_report(
 
                 if iteration == final_iter and config["name"] == "test":
                     with open(
-                        os.path.join(dataset.source_path, "result-octree.txt"), "w+"
+                        os.path.join(dataset.source_path, "result-octree-w.txt"), "w+"
                     ) as f:
                         f.write("iterations: {}\n".format(iteration))
                         f.write("PSNR: {:.2f}\n".format(psnr_test))
@@ -392,9 +392,9 @@ def training_report(
 
 
 if __name__ == "__main__":
-    dense_test_iter = [15000]
-    # for i in range(0, 15000, 1000):
-    #     dense_test_iter.append(i)
+    dense_test_iter = [30000]
+    for i in range(0, 15000, 1000):
+        dense_test_iter.append(i)
     dense_test_iter.sort()
 
     # Set up command line argument parser
@@ -410,7 +410,7 @@ if __name__ == "__main__":
         "--test_iterations", nargs="+", type=int, default=dense_test_iter
     )
     parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=dense_test_iter
+        "--save_iterations", nargs="+", type=int, default=[30000]
     )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])

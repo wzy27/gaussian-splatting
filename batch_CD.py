@@ -7,34 +7,26 @@ from tqdm import tqdm
 import json
 from pathlib import Path
 
-# exp_dirs = [
-#     "/data/nglm005/zhengyu.wen/final/gaussian-splatting/data/Omnizl",
-# ]
-
-# data_names = []
-
-# for exp_dir in exp_dirs:
-#     for data_name in os.listdir(exp_dir):
-#         if os.path.exists(os.path.join(exp_dir, data_name, "meshes/00100000.ply")):
-#             data_names.append(data_name)
-
-# data_names.sort()
-# print(data_names)
-# print(len(data_names))
-
 os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 os.environ["PYTHONPATH"] = "$PYTHONPATH:/data/nglm005/zhengyu.wen/LOTree-zhengyu"
 
-shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-ours.ply -t data/CD_test/{0}/Scan-matched.obj"
+# shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-ours.ply -t data/CD_test/{0}/Scan-matched.obj"
+shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-{1}.ply -t data/CD_test/{0}/Scan-matched.obj -d {1}"
+# shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-{1}.ply -t data/CD_test/{0}/gt_{0}.ply -d {1}"
+division = "ours"
 
-
-with open("CD_done.json", "r") as done_file:
+with open("CD_{}.json".format(division), "r") as done_file:
     done_dict = json.load(done_file)
 
 for data_name in sorted(os.listdir("data/CD_test")):
     if data_name in done_dict:
         print(data_name, "done.")
     else:
-        command = shell_command.format(data_name)
-        print(command)
-        subprocess.run(command, shell=True, executable="/bin/bash")
+        if os.path.exists("data/CD_test/{0}/Scan-matched.ply".format(data_name)):
+            shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-{1}.ply -t data/CD_test/{0}/Scan-matched.ply -d {1}"
+
+        if os.path.exists("data/CD_test/{0}/{0}-{1}.ply".format(data_name, division)):
+            # if os.path.exists("data/CD_test/{0}/gt_{0}.ply".format(data_name, division)):
+            command = shell_command.format(data_name, division)
+            print(command)
+            subprocess.run(command, shell=True, executable="/bin/bash")
