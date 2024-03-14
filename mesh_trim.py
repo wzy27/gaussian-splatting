@@ -44,8 +44,8 @@ def normalize_mesh(ours_path, gt_path):
     print("ours:", ours_scale)
     print("gt:", gt_scale)
 
-    ours_ratio = ours_scale[2] / ours_scale[0]
-    gt_ratio = gt_scale[1] / gt_scale[0]
+    ours_ratio = ours_scale[1] / ours_scale[0]
+    gt_ratio = gt_scale[2] / gt_scale[0]
 
     return ours_ratio / gt_ratio
     # if gt_ratio / ours_ratio > 1.05:
@@ -76,7 +76,7 @@ for exp_dir, data_name in sorted(data_dirs):
     result_dict[data_name] = normalize_mesh(load_path["ours"], load_path["gt"])
     print(data_name, result_dict[data_name])
 
-with open("ratio.json", "w+") as json_file:
+with open("normal_ratio.json", "w+") as json_file:
     json.dump(result_dict, json_file)
 
 # if __name__ == "__main__":

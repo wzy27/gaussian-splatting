@@ -378,6 +378,10 @@ class GaussianModel:
 
         self.active_sh_degree = self.max_sh_degree
 
+        # TODO: clear here when running normal training!
+        self._old_xyz = self._xyz
+        self._old_rotation = self._rotation
+
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -688,6 +692,7 @@ class GaussianModel:
 
     def rotation_fix(self, mask, matrix):
         rotation_matrix = build_rotation(self._old_rotation)
+        # rotation_matrix = build_rotation(self._rotation)
         rotation_matrix = rotation_matrix @ matrix
 
         rot = R.from_matrix(rotation_matrix.cpu())
@@ -697,5 +702,6 @@ class GaussianModel:
             (new_rotation[:, 3:], new_rotation[:, :3]), dim=1
         ).float()  # wxyz quaternion format
 
-        m = mask.unsqueeze(-1)
-        self._rotation = self._old_rotation * ~m + true_rotation.cuda() * m
+        self._rotation = true_rotation.cuda()
+        # m = mask.unsqueeze(-1)
+        # self._rotation = self._old_rotation * ~m + true_rotation.cuda() * m
