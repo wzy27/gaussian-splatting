@@ -19,6 +19,7 @@ from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, logistic_sigmoid
 from utils.system_utils import mkdir_p
 import uuid
+import json
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
@@ -103,7 +104,12 @@ def training(
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix(
+                    {
+                        "Loss": f"{ema_loss_for_log:.{7}f}",
+                        "#points": gaussians.get_xyz.shape[0],
+                    }
+                )
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -125,7 +131,7 @@ def training(
             )
             if iteration in saving_iterations:
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.defined_save(dataset.source_path, iteration)
+                scene.save(iteration)
 
             # Densification
             if iteration < opt.densify_until_iter:
@@ -272,14 +278,15 @@ def training_report(
                 )
 
                 if iteration == final_iter and config["name"] == "test":
+                    result_dict = {
+                        "iter": int(iteration),
+                        "PSNR": float(psnr_test),
+                        "point_count": int(scene.gaussians.get_xyz.shape[0]),
+                    }
                     with open(
-                        os.path.join(dataset.source_path, "result-base.txt"), "w+"
+                        os.path.join(scene.model_path, "base-result.json"), "w+"
                     ) as f:
-                        f.write("iterations: {}\n".format(iteration))
-                        f.write("PSNR: {:.2f}\n".format(psnr_test))
-                        f.write(
-                            "#points: {}\n".format(scene.gaussians.get_xyz.shape[0])
-                        )
+                        json.dump(result_dict, f)
 
                 if tb_writer:
                     tb_writer.add_scalar(
@@ -297,9 +304,9 @@ def training_report(
 
 if __name__ == "__main__":
 
-    dense_test_iter = [30000]
-    for i in range(0, 30000, 5000):
-        dense_test_iter.append(i)
+    dense_test_iter = [2000, 5000, 15000, 30000]
+    # for i in range(0, 30000, 5000):
+    #     dense_test_iter.append(i)
     dense_test_iter.sort()
 
     # Set up command line argument parser

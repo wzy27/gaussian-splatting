@@ -27,12 +27,14 @@ def as_mesh(scene_or_mesh):
     return mesh
 
 
-def get_chamfer_dist(src_mesh, tgt_mesh, num_samples=30000):
+def get_chamfer_dist(src_mesh, tgt_mesh, num_samples=10000):
     # Chamfer
     src_surf_pts, _ = trimesh.sample.sample_surface(
         src_mesh, num_samples
     )  # src_surf_pts  has shape of (num_of_pts, 3)
     tgt_surf_pts, _ = trimesh.sample.sample_surface(tgt_mesh, num_samples)
+
+    print("point sampling done.")
 
     _, src_tgt_dist, _ = trimesh.proximity.closest_point(tgt_mesh, src_surf_pts)
     _, tgt_src_dist, _ = trimesh.proximity.closest_point(src_mesh, tgt_surf_pts)
@@ -63,14 +65,21 @@ def get_chamfer_dist(src_mesh, tgt_mesh, num_samples=30000):
     tgt_src_dist_w_thresh = np.mean(sqre_tgt_src_dist[sqre_tgt_src_dist < thresh])
     chamfer_dist_w_thresh = (src_tgt_dist_w_thresh + tgt_src_dist_w_thresh) / 2
 
-    names = ["pred2stl", "stl2pred", "cd", "cd_thresh"]
+    names = ["forward", "backward", "forward-thre", "backward-thre"]
     result = {}
     result[names[0]] = src_tgt_dist
     result[names[1]] = tgt_src_dist
-    result[names[2]] = chamfer_dist * 1000
-    result[names[3]] = chamfer_dist_w_thresh
+    result[names[2]] = src_tgt_dist_w_thresh
+    result[names[3]] = tgt_src_dist_w_thresh
 
     return result
+
+
+def calc_CD(source_path, target_path):
+    mesh = as_mesh(trimesh.load(source_path))
+    ref = as_mesh(trimesh.load(target_path))
+    print("mesh loaded.")
+    return get_chamfer_dist(mesh, ref)
 
 
 if __name__ == "__main__":
@@ -82,24 +91,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    mesh = as_mesh(trimesh.load(args.source_path))
-    ref = as_mesh(trimesh.load(args.target_path))
-    dist_forward = get_chamfer_dist(mesh, ref)
-
-    file_name = os.path.basename(args.source_path)
-    time_str = datetime.now().strftime("%m-%d-%H:%M:%S")
-    log_path = "CD-test.log"
-    with open(log_path, "a") as f:
-        f.write(
-            "Time:{} File:{} CD:{:.6f}\n".format(
-                time_str, file_name, dist_forward["cd"]
-            )
-        )
-    print("CD: ", dist_forward)
-
-    with open("CD_{}.json".format(args.division), "r") as done_file:
-        done_dict = json.load(done_file)
-    exp_name = Path(dirname(args.source_path)).stem
-    done_dict[exp_name] = dist_forward["cd"]
-    with open("CD_{}.json".format(args.division), "w") as done_file:
-        json.dump(done_dict, done_file)
+    print(calc_CD(args.source_path, args.target_path))

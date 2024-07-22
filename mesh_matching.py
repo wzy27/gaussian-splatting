@@ -3,6 +3,7 @@ import trimesh
 from scipy.spatial.transform import Rotation as R
 import argparse
 import sys
+import os
 
 
 def as_mesh(scene_or_mesh):
@@ -35,6 +36,11 @@ def normalize_mesh(input_path, output_path, degree):
     xyz_rotated = rotation.apply(xyz_normed)
 
     mesh.vertices = xyz_rotated
+
+    parent_dir = os.path.abspath(os.path.join(output_path, os.pardir))
+    print(parent_dir)
+    if not os.path.exists(parent_dir):
+        os.makedirs(parent_dir)
     mesh.export(output_path)
 
 

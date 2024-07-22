@@ -6,15 +6,18 @@ from utils.image_utils import psnr
 from tqdm import tqdm
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 os.environ["PYTHONPATH"] = "$PYTHONPATH:/data/nglm005/zhengyu.wen/LOTree-zhengyu"
 
+# with open("data/need_names.json", "r") as f:
 with open("data/need_names_test.json", "r") as f:
     name_dict = json.load(f)
 
-methods = ["gt", "ours"]  #  "ours","neus2", "gof", "sugar", "voxurf"
-# methods = ["gt", "2dgs", "gof", "sugar", "neus2", "ours", "voxurf"]  #  "voxurf","2dgs"
+# methods = ["2dgs", "gof", "sugar", "neus2", "ours", "voxurf"]  #  "voxurf","2dgs"
+
+methods = ["ours"]  # done: "gof", "sugar", "neus2", "ours"
 paths = {
     "gt": "gt.ply",
     "ours": "ours.ply",
@@ -31,7 +34,10 @@ CD_path = "data/result_files/test_CD-as_mesh.json"
 from chamferDistance import calc_CD
 
 
-def get_one_CD(instance, method):
+def get_one_CD(arg):
+    instance, method = arg
+    # print(instance, method)
+
     with open(CD_path, "r") as f:
         CD_dict = json.load(f)
     if instance in CD_dict:
@@ -44,6 +50,11 @@ def get_one_CD(instance, method):
 
     print(method, instance)
     result_dict = calc_CD(method_path, gt_path)
+
+    with open(CD_path, "r") as f:
+        CD_dict = json.load(f)
+    if instance in CD_dict:
+        instance_dict = CD_dict[instance]
     instance_dict[method] = result_dict
     CD_dict[instance] = instance_dict
 
@@ -51,9 +62,9 @@ def get_one_CD(instance, method):
         json.dump(CD_dict, f)
 
 
+param_list = []
+
 for instance in instances:
-    if not instance[-1].isdigit():
-        continue
     instance_dict = {}
     for method in methods:
         if method == "gt":
@@ -65,31 +76,11 @@ for instance in instances:
         if instance in CD_dict and method in CD_dict[instance]:
             continue
 
-        gt_path = os.path.join("data/meshes", instance, paths["gt"])
-        method_path = os.path.join("data/meshes", instance, paths[method])
+        # get_one_CD(instance, method)
+        param_list.append((instance, method))
 
-        if os.path.exists(gt_path) and os.path.exists(method_path):
-            print(method, instance)
-            result_dict = calc_CD(method_path, gt_path)
-            instance_dict[method] = result_dict
-            CD_dict[instance] = instance_dict
+print(param_list)
 
-            with open(CD_path, "w") as f:
-                json.dump(CD_dict, f)
-
-# with open("CD_{}.json".format(division), "r") as done_file:
-#     done_dict = json.load(done_file)
-
-# for data_name in sorted(os.listdir("data/CD_test")):
-#     shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-{1}.ply -t data/CD_test/{0}/Scan-matched.obj -d {1}"
-#     if data_name in done_dict:
-#         print(data_name, "done.")
-#     else:
-#         if os.path.exists("data/CD_test/{0}/Scan-matched.ply".format(data_name)):
-#             shell_command = "python chamferDistance.py -s data/CD_test/{0}/{0}-{1}.ply -t data/CD_test/{0}/Scan-matched.ply -d {1}"
-
-#         if os.path.exists("data/CD_test/{0}/{0}-{1}.ply".format(data_name, division)):
-#             # if os.path.exists("data/CD_test/{0}/gt_{0}.ply".format(data_name, division)):
-#             command = shell_command.format(data_name, division)
-#             print(command)
-#             subprocess.run(command, shell=True, executable="/bin/bash")
+with ProcessPoolExecutor(8) as exe:
+    # perform calculations
+    results = exe.map(get_one_CD, param_list)

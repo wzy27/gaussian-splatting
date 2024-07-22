@@ -21,26 +21,38 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 import time
+import json
 
 
 def render_set(
     model_path, name, iteration, views, gaussians, pipeline, background, thre=0.05
 ):
 
-    # render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    # gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
-    render_path = os.path.join(model_path, "render_{}".format(name))
-    gts_path = os.path.join(model_path, "gt_{}".format(name))
-    makedirs(render_path, exist_ok=True)
-    makedirs(gts_path, exist_ok=True)
+    # render_path = os.path.join(model_path, "render_{}".format(name))
+    # gts_path = os.path.join(model_path, "gt_{}".format(name))
+    # makedirs(render_path, exist_ok=True)
+    # makedirs(gts_path, exist_ok=True)
 
+    total = 0.0
+    cnt = 0
+
+    # gaussians.extract_with_normal(f"{model_path}/pcd.ply")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering = render(view, gaussians, pipeline, background)["render"]
+        # start = time.time()
+        render_result = render(view, gaussians, pipeline, background)
+        rendering = render_result["render"]
+        # time_cost = render_result["time"]
+        # total += time_cost
+        # end = time.time()
+        # total += end - start
+        # cnt += 1
         gt = view.original_image[0:3, :, :]
-        torchvision.utils.save_image(
-            rendering, os.path.join(render_path, "r_{}".format(idx) + ".png")
-        )
+        # torchvision.utils.save_image(
+        #     rendering, os.path.join(render_path, "r_{}".format(idx) + ".png")
+        # )
         # torchvision.utils.save_image(
         #     gt, os.path.join(gts_path, "r_{}".format(idx) + ".png")
         # )
@@ -57,16 +69,25 @@ def render_set(
     #     rendering = render(view, gaussians, pipeline, background)["render"]
     #     end = time.time()
     #     total += end - start
-    #     # gt = view.original_image[0:3, :, :]
-    #     # torchvision.utils.save_image(
-    #     #     rendering, os.path.join(render_path, "{0:05d}".format(idx) + ".png")
-    #     # )
-    #     # torchvision.utils.save_image(
-    #     #     gt, os.path.join(gts_path, "{0:05d}".format(idx) + ".png")
-    #     # )
-    # FPS = len(dup_views) / total
+    # gt = view.original_image[0:3, :, :]
+    # torchvision.utils.save_image(
+    #     rendering, os.path.join(render_path, "{0:05d}".format(idx) + ".png")
+    # )
+    # torchvision.utils.save_image(
+    #     gt, os.path.join(gts_path, "{0:05d}".format(idx) + ".png")
+    # )
+
+    # FPS = cnt / total
     # print("#points: {}".format(gaussians.get_xyz.shape[0]))
-    # print("#images: {} FPS: {:.2f}".format(len(dup_views), FPS))
+    # print("#images: {} FPS: {:.2f}".format(cnt, FPS))
+
+    # instance_name = model_path.split("/")[-1]
+    # result_file_path = "data/result_files/Omnizl/3DGS/FPS.json"
+    # with open(result_file_path, "r") as f:
+    #     fps_dict = json.load(f)
+    # fps_dict[instance_name] = FPS
+    # with open(result_file_path, "w") as f:
+    #     json.dump(fps_dict, f)
 
 
 def render_sets(
@@ -87,24 +108,26 @@ def render_sets(
             dataset, gaussians, load_iteration=iteration, shuffle=False, thre=thre
         )
 
+        gaussians.sample_pcd(f"{dataset.model_path}/sampled_pcd.ply")
+
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        if not skip_train:
-            render_set(
-                dataset.source_path,
-                "train",
-                scene.loaded_iter,
-                scene.getTrainCameras(),
-                gaussians,
-                pipeline,
-                background,
-                thre,
-            )
+        # if not skip_train:
+        #     render_set(
+        #         dataset.model_path,
+        #         "train",
+        #         scene.loaded_iter,
+        #         scene.getTrainCameras(),
+        #         gaussians,
+        #         pipeline,
+        #         background,
+        #         thre,
+        #     )
 
         if not skip_test:
             render_set(
-                dataset.source_path,
+                dataset.model_path,
                 "test",
                 scene.loaded_iter,
                 scene.getTestCameras(),

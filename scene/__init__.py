@@ -59,7 +59,7 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](
-                args.source_path, args.white_background, args.eval, octree
+                args.source_path, args.white_background, args.eval
             )
         elif os.path.exists(os.path.join(args.source_path, "intrinsics.txt")):
             print("Found intrinsics.txt file, assuming Tank&Temples data set!")
@@ -105,11 +105,6 @@ class Scene:
                 scene_info.test_cameras, resolution_scale, args
             )
 
-        # TODO: correct here when completing rendering!
-        # self.gaussians.load_ply(
-        #     os.path.join(os.path.dirname(scene_info.ply_path), "octree_15000_w.ply")
-        # )
-
         if self.loaded_iter:
             self.gaussians.load_ply(
                 os.path.join(
@@ -132,9 +127,6 @@ class Scene:
         self.gaussians.save_ply(
             os.path.join(path, "base_iter_{}.ply".format(iteration))
         )
-
-    def octree_save(self, path, iteration):
-        self.gaussians.save_ply(os.path.join(path, "octree_{}_w.ply".format(iteration)))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

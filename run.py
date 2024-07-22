@@ -17,23 +17,23 @@ data_dirs.sort()
 print(data_dirs)
 print(len(data_dirs))
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["PYTHONPATH"] = "$PYTHONPATH:/data/nglm005/zhengyu.wen/LOTree-zhengyu"
 print(os.environ["PYTHONPATH"])
 
 shell_command_prefix = "python train-octree.py --eval -s "
 shell_command_postfix = " --sh_degree 3 --iterations 30000 --save_iterations 30000 "
-shell_param = "--lambda_opacity 5 --lambda_orientation 0.3 --lambda_scale 2 --opacity_reset_interval 300 -w"
+shell_param = "--lambda_opacity 2 --lambda_orientation 0.15 --lambda_scale 1.5 --opacity_reset_interval 300 -w"
 
-# for data_dir in data_dirs:
-#     command = shell_command_prefix + data_dir + shell_command_postfix + shell_param
-#     print(command)
-#     subprocess.run(command, shell=True, executable="/bin/bash")
-#     with open("batch_octree.log", "a+") as log_file:
-#         log_file.write(data_dir + " Done.\n")
-data_dir = "/data/nglm005/zhengyu.wen/final/gaussian-splatting/data/blender/chair"
-command = shell_command_prefix + data_dir + shell_command_postfix + shell_param
-print(command)
-subprocess.run(command, shell=True, executable="/bin/bash")
-with open("batch_octree.log", "a+") as log_file:
-    log_file.write(data_dir + " Done.\n")
+for data_dir in data_dirs:
+    command = shell_command_prefix + data_dir + shell_command_postfix + shell_param
+    print(command)
+    subprocess.run(command, shell=True, executable="/bin/bash")
+    with open("batch_octree.log", "a+") as log_file:
+        log_file.write(data_dir + " Done.\n")
+# data_dir = "/data/nglm005/zhengyu.wen/final/gaussian-splatting/data/blender/chair"
+# command = shell_command_prefix + data_dir + shell_command_postfix + shell_param
+# print(command)
+# subprocess.run(command, shell=True, executable="/bin/bash")
+# with open("batch_octree.log", "a+") as log_file:
+#     log_file.write(data_dir + " Done.\n")

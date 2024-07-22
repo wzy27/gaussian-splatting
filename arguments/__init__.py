@@ -62,9 +62,12 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
 
-        self.lambda_opacity = 10.0
-        self.lambda_scale = 100.0
-        self.lambda_orientation = 1.0
+        self.mesh_init = False
+        self.opacity_scalar = 10
+        self.near_threshold = 0.05
+        self.lambda_opacity = 3
+        self.lambda_scale = 0.1
+        self.lambda_orientation = 0.0
 
         self.gaussian_smooth = False
         self.hessian_eikonal = False

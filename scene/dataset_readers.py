@@ -31,6 +31,12 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 
+import random
+import open3d as o3d
+
+# # TODO: add scene scale here, only for hessian!
+scene_scale = 0.6
+
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -236,9 +242,8 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
             c2w[:3, 1:3] *= -1
 
-            # TODO: add scene scale here, only for hessian!
-            scene_scale = 0.6
-            c2w[:3, 3] *= scene_scale
+            # add scene scale here, only for hessian!
+            # c2w[:3, 3] *= scene_scale
 
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
@@ -286,7 +291,9 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 def initRandomPointCloud(num_pts, ply_path):
     print(f"Generating random point cloud ({num_pts})...")
 
-    xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+    base_width = 1.3 * scene_scale
+
+    xyz = np.random.random((num_pts, 3)) * 2 * base_width - base_width
     shs = np.random.random((num_pts, 3)) / 255.0
     pcd = BasicPointCloud(
         points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
@@ -296,10 +303,18 @@ def initRandomPointCloud(num_pts, ply_path):
 
 
 def initFromBaseMesh(path, ply_path):
-    plydata = PlyData.read(path)
-    vertices = plydata["vertex"]
-    num_pts = len(vertices)
-    positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
+    # plydata = PlyData.read(path)
+    # vertices = plydata["vertex"]
+    # # idxs = random.sample(range(len(vertices)), k=100000)
+    # # vertices = vertices[idxs]
+    # num_pts = len(vertices)
+    # positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
+
+    base_pcd = o3d.io.read_point_cloud(path)
+    down_pcd = base_pcd.voxel_down_sample(voxel_size=0.01)
+    positions = np.asarray(down_pcd.points)
+    num_pts = len(positions)
+
     shs = np.random.random((num_pts, 3)) / 255.0
     pcd = BasicPointCloud(
         points=positions, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
@@ -308,7 +323,9 @@ def initFromBaseMesh(path, ply_path):
     storePly(ply_path, positions, SH2RGB(shs) * 255)
 
 
-def readNerfSyntheticInfo(path, white_background, eval, octree=None, extension=".png"):
+def readNerfSyntheticInfo(
+    path, white_background, eval, mesh_init=False, extension=".png"
+):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(
         path, "transforms_train.json", white_background, extension
@@ -330,17 +347,17 @@ def readNerfSyntheticInfo(path, white_background, eval, octree=None, extension="
     #     num_pts = 100_000
     #     initRandomPointCloud(num_pts, ply_path)
 
-        # baseMesh_path = os.path.join(path, "base_mesh.ply")
-        # baseMesh_path = path + "/meshes/00666666.ply"
-        # if not os.path.exists(baseMesh_path):
-        #     num_pts = 100_000
-        #     initRandomPointCloud(num_pts, ply_path)
-        # else:
-        #     print("Init from base mesh ...")
-        #     initFromBaseMesh(baseMesh_path, ply_path)
+    baseMesh_path = os.path.join(path, "base_mesh.ply")
+    baseMesh_path = path + "/meshes/00666666.ply"
+    if (not mesh_init) or (not os.path.exists(baseMesh_path)):
+        num_pts = 100_000
+        initRandomPointCloud(num_pts, ply_path)
+    else:
+        print("Init from base mesh ...")
+        initFromBaseMesh(baseMesh_path, ply_path)
 
-    num_pts = 100_000
-    initRandomPointCloud(num_pts, ply_path)
+    # num_pts = 100_000
+    # initRandomPointCloud(num_pts, ply_path)
 
     try:
         pcd = fetchPly(ply_path)

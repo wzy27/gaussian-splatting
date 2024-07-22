@@ -35,6 +35,13 @@ class GaussianModel:
             symm = strip_symmetric(actual_covariance)
             return symm
 
+        def extract_covariance_matrix(scaling, scaling_modifier, rotation):
+            L = build_scaling_rotation(scaling_modifier * scaling, rotation)
+            actual_covariance = L @ L.transpose(1, 2)
+            return actual_covariance
+
+        self.matrix_activation = extract_covariance_matrix
+
         self.scaling_activation = torch.exp
         self.scaling_inverse_activation = torch.log
 
@@ -379,8 +386,8 @@ class GaussianModel:
         self.active_sh_degree = self.max_sh_degree
 
         # TODO: clear here when running normal training!
-        self._old_xyz = self._xyz
-        self._old_rotation = self._rotation
+        # self._old_xyz = self._xyz
+        # self._old_rotation = self._rotation
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -600,17 +607,29 @@ class GaussianModel:
         )
         self.extract_by_mask(transparent_mask, path)
 
-    # def extract_by_mask(self, mask, path):
-    #     mkdir_p(os.path.dirname(path))
+    def extract_with_normal(self, path):
+        mkdir_p(os.path.dirname(path))
 
-    #     xyz = self._xyz[mask].detach().cpu().numpy()
-    #     dtype_full = [(attribute, "f4") for attribute in ["x", "y", "z"]]
+        xyz = self._xyz.detach().cpu().numpy()
+        normals = self.get_normal().detach().cpu().numpy().squeeze()
+        dtype_full = [
+            (attribute, "f4") for attribute in ["x", "y", "z", "nx", "ny", "nz"]
+        ]
 
-    #     elements = np.empty(xyz.shape[0], dtype=dtype_full)
-    #     attributes = xyz
-    #     elements[:] = list(map(tuple, attributes))
-    #     el = PlyElement.describe(elements, "vertex")
-    #     PlyData([el]).write(path)
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, "vertex")
+        PlyData([el]).write(path)
+
+        np.savetxt(
+            path.replace(".ply", ".xyzn"),
+            attributes,
+        )
+        np.savetxt(
+            path.replace(".ply", ".xyz"),
+            xyz,
+        )
 
     def extract_by_mask(self, mask, path):
         mkdir_p(os.path.dirname(path))
@@ -642,6 +661,53 @@ class GaussianModel:
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, "vertex")
         PlyData([el]).write(path)
+
+    def get_cov_matrix(self, scaling_modifier=1):
+        return self.matrix_activation(
+            self.get_scaling, scaling_modifier, self._rotation
+        )
+
+    def sample_pcd(self, path):
+        mkdir_p(os.path.dirname(path))
+
+        tot_scaling = (
+            (self.get_scaling[:, 0] * self.get_scaling[:, 1] * self.get_scaling[:, 2])
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        scale_threshold = 1e-7
+
+        covs = self.get_cov_matrix().detach().cpu().numpy()
+
+        xyz_list = []
+        for idx in range(len(tot_scaling)):
+            if tot_scaling[idx] < scale_threshold:
+                xyz_list.append(self.get_xyz[idx].detach().cpu().numpy().reshape(1, 3))
+            else:
+                num_pts = int(tot_scaling[idx] // scale_threshold)
+                # for i in range(num_pts):
+                mean = self.get_xyz[idx].detach().cpu().numpy()
+                cov = covs[idx]
+                sampled_pts = np.random.multivariate_normal(
+                    mean=mean, cov=cov, size=num_pts
+                )
+                xyz_list.append(sampled_pts)
+            pass
+
+        xyz = np.concatenate(xyz_list, axis=0)
+        dtype_full = [(attribute, "f4") for attribute in ["x", "y", "z"]]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = xyz
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, "vertex")
+        PlyData([el]).write(path)
+
+        np.savetxt(
+            path.replace(".ply", ".xyz"),
+            xyz,
+        )
 
     def apply_transform(self, matrix):
         # Assume input n*4*4 matrix (useful n*4*3)

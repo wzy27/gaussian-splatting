@@ -28,6 +28,7 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 import numpy as np
 from datetime import datetime
 import time
+import json
 
 from pathlib import Path
 
@@ -58,7 +59,9 @@ def training(
     model_name = Path(dataset.source_path).stem
 
     octree = LOctreeA.LOTLoad(
-        path=os.path.join(dataset.source_path, "SDF_512_{}.npz".format(model_name)),
+        path=os.path.join(
+            dataset.source_path, "SDF_1024_{}_reb.npz".format(model_name)
+        ),
         path_d=None,
         load_full=False,
         load_dict=False,
@@ -117,12 +120,12 @@ def training(
         SDF_values = torch.from_numpy(octree.querySDFfromTree(tree_coords)).cuda()
         # # Loss
         # geometry loss - density to SDF
-        near_threshold = 0.1
+        near_threshold = dataset.near_threshold
         near_mask = torch.logical_or(
             SDF_values < -near_threshold, SDF_values > near_threshold
         )
 
-        opacity_density_scaler = 5.0
+        opacity_density_scaler = dataset.opacity_scalar
         estimated_opacity = 4 * logistic_sigmoid(
             SDF_values, opacity_density_scaler
         ).unsqueeze(-1)
@@ -218,9 +221,8 @@ def training(
                 #     )
                 # )
 
-                if iteration in saving_iterations:
-                    print("\n[ITER {}] Saving Gaussians".format(iteration))
-                    scene.octree_save(dataset.source_path, iteration)
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
 
                 # with open(os.path.join(dataset.source_path, "result.txt"), "w+") as f:
                 #     f.write("PSNR: {:.2f}\n".format())
@@ -371,14 +373,23 @@ def training_report(
                 )
 
                 if iteration == final_iter and config["name"] == "test":
+                    # with open(
+                    #     os.path.join(scene.model_path, "octree-temp.txt"), "w+"
+                    # ) as f:
+                    #     f.write("iterations: {}\n".format(iteration))
+                    #     f.write("PSNR: {:.2f}\n".format(psnr_test))
+                    #     f.write(
+                    #         "#points: {}\n".format(scene.gaussians.get_xyz.shape[0])
+                    #     )
+                    result_dict = {
+                        "iter": int(iteration),
+                        "PSNR": float(psnr_test),
+                        "point_count": int(scene.gaussians.get_xyz.shape[0]),
+                    }
                     with open(
-                        os.path.join(dataset.source_path, "result-octree-w.txt"), "w+"
+                        os.path.join(scene.model_path, "octree-result.json"), "w+"
                     ) as f:
-                        f.write("iterations: {}\n".format(iteration))
-                        f.write("PSNR: {:.2f}\n".format(psnr_test))
-                        f.write(
-                            "#points: {}\n".format(scene.gaussians.get_xyz.shape[0])
-                        )
+                        json.dump(result_dict, f)
 
                 if tb_writer:
                     tb_writer.add_scalar(
@@ -392,8 +403,8 @@ def training_report(
 
 
 if __name__ == "__main__":
-    dense_test_iter = [30000]
-    for i in range(0, 15000, 1000):
+    dense_test_iter = [300, 30000]
+    for i in range(0, 30000, 5000):
         dense_test_iter.append(i)
     dense_test_iter.sort()
 
@@ -409,9 +420,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--test_iterations", nargs="+", type=int, default=dense_test_iter
     )
-    parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=[30000]
-    )
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[30000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
@@ -421,7 +430,7 @@ if __name__ == "__main__":
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    # safe_state(args.quiet)
 
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(

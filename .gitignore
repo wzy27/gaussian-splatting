@@ -1,6 +1,6 @@
 *.pyc
 .vscode
-output
+output*
 build
 diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist
@@ -16,3 +16,5 @@ mesh
 *.ipynb
 *.json
 temp
+
+transforms
