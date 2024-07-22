@@ -31,9 +31,6 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 
-import random
-import open3d as o3d
-
 # # TODO: add scene scale here, only for hessian!
 scene_scale = 0.6
 
@@ -243,7 +240,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             c2w[:3, 1:3] *= -1
 
             # add scene scale here, only for hessian!
-            # c2w[:3, 3] *= scene_scale
+            c2w[:3, 3] *= scene_scale
 
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
@@ -302,30 +299,7 @@ def initRandomPointCloud(num_pts, ply_path):
     storePly(ply_path, xyz, SH2RGB(shs) * 255)
 
 
-def initFromBaseMesh(path, ply_path):
-    # plydata = PlyData.read(path)
-    # vertices = plydata["vertex"]
-    # # idxs = random.sample(range(len(vertices)), k=100000)
-    # # vertices = vertices[idxs]
-    # num_pts = len(vertices)
-    # positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
-
-    base_pcd = o3d.io.read_point_cloud(path)
-    down_pcd = base_pcd.voxel_down_sample(voxel_size=0.01)
-    positions = np.asarray(down_pcd.points)
-    num_pts = len(positions)
-
-    shs = np.random.random((num_pts, 3)) / 255.0
-    pcd = BasicPointCloud(
-        points=positions, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
-    )
-
-    storePly(ply_path, positions, SH2RGB(shs) * 255)
-
-
-def readNerfSyntheticInfo(
-    path, white_background, eval, mesh_init=False, extension=".png"
-):
+def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(
         path, "transforms_train.json", white_background, extension
@@ -347,17 +321,8 @@ def readNerfSyntheticInfo(
     #     num_pts = 100_000
     #     initRandomPointCloud(num_pts, ply_path)
 
-    baseMesh_path = os.path.join(path, "base_mesh.ply")
-    baseMesh_path = path + "/meshes/00666666.ply"
-    if (not mesh_init) or (not os.path.exists(baseMesh_path)):
-        num_pts = 100_000
-        initRandomPointCloud(num_pts, ply_path)
-    else:
-        print("Init from base mesh ...")
-        initFromBaseMesh(baseMesh_path, ply_path)
-
-    # num_pts = 100_000
-    # initRandomPointCloud(num_pts, ply_path)
+    num_pts = 100_000
+    initRandomPointCloud(num_pts, ply_path)
 
     try:
         pcd = fetchPly(ply_path)
@@ -372,120 +337,9 @@ def readNerfSyntheticInfo(
         ply_path=ply_path,
     )
     return scene_info
-
-
-def readTTSceneInfo(path, white_background, eval, extension=".png"):
-    train_cam_infos, test_cam_infos = readTTCameraInfo(path, white_background)
-
-    ply_path = os.path.join(path, "points3d.ply")
-    initRandomPointCloud(num_pts=100_000, ply_path=ply_path)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
-
-    nerf_normalization = getNerfppNorm(train_cam_infos)
-    scene_info = SceneInfo(
-        point_cloud=pcd,
-        train_cameras=train_cam_infos,
-        test_cameras=test_cam_infos,
-        nerf_normalization=nerf_normalization,
-        ply_path=ply_path,
-    )
-    return scene_info
-
-
-def loadTTImages(basedir, split):
-    pose_paths = sorted(
-        glob.glob(os.path.join(basedir, "pose_{}".format(split), "*txt"))
-    )
-    img_paths = sorted(glob.glob(os.path.join(basedir, "{}".format(split), "*png")))
-
-    all_poses = []
-    # all_imgs = []
-    for i, (pose_path, rgb_path) in enumerate(zip(pose_paths, img_paths)):
-        all_poses.append(np.loadtxt(pose_path).astype(np.float32))
-        # all_imgs.append((imageio.imread(rgb_path) / 255.0).astype(np.float32))
-
-    # imgs = np.stack(all_imgs, 0)
-    poses = np.stack(all_poses, 0)
-    return poses, img_paths
-
-
-def createTTCameraInfo(poses, img_paths, focal, white_background=True):
-    cam_infos = []
-
-    for idx, (pose, img_path) in enumerate(zip(poses, img_paths)):
-        # cam_name = os.path.join(path, frame["file_path"] + extension)
-
-        # NeRF 'transform_matrix' is a camera-to-world transform
-        # c2w = np.array(frame["transform_matrix"])
-        c2w = pose
-        # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-        c2w[:3, 1:3] *= -1
-
-        # get the world-to-camera transform and set R, T
-        # w2c = np.linalg.inv(c2w)
-        w2c = c2w
-        R = np.transpose(
-            w2c[:3, :3]
-        )  # R is stored transposed due to 'glm' in CUDA code
-        T = w2c[:3, 3]
-
-        image_name = Path(img_path).stem
-        image = Image.open(img_path)
-
-        im_data = np.array(image.convert("RGBA"))
-
-        bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
-
-        norm_data = im_data / 255.0
-        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (
-            1 - norm_data[:, :, 3:4]
-        )
-        image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
-
-        # fovy = focal2fov(intrinsics[0, 0], image.size[1])
-        FovY = focal2fov(focal, image.size[1])
-        FovX = focal2fov(focal, image.size[0])
-
-        cam_infos.append(
-            CameraInfo(
-                uid=idx,
-                R=R,
-                T=T,
-                FovY=FovY,
-                FovX=FovX,
-                image=image,
-                image_path=img_path,
-                image_name=image_name,
-                width=image.size[0],
-                height=image.size[1],
-            )
-        )
-    return cam_infos
-
-
-def readTTCameraInfo(basedir, white_background=True):
-    train_poses, train_img_paths = loadTTImages(basedir, "train")
-    test_poses, test_img_paths = loadTTImages(basedir, "test")
-
-    path_intrinsics = os.path.join(basedir, "intrinsics.txt")
-    K = np.loadtxt(path_intrinsics)
-    focal = float(K[0, 0])
-
-    train_cam_infos = createTTCameraInfo(
-        train_poses, train_img_paths, focal, white_background
-    )
-    test_cam_infos = createTTCameraInfo(
-        test_poses, test_img_paths, focal, white_background
-    )
-
-    return train_cam_infos, test_cam_infos
 
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender": readNerfSyntheticInfo,
-    "T&T": readTTSceneInfo,
 }

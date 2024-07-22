@@ -67,11 +67,6 @@ class ModelParams(ParamGroup):
         self.near_threshold = 0.05
         self.lambda_opacity = 3
         self.lambda_scale = 0.1
-        self.lambda_orientation = 0.0
-
-        self.gaussian_smooth = False
-        self.hessian_eikonal = False
-        self.gauss_splat_corr = True
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -108,17 +103,7 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
-
-        self.epochs = 6
         super().__init__(parser, "Optimization Parameters")
-
-
-class OverallParams(ParamGroup):
-    def __init__(self, parser):
-        self.epochs = 10
-        self.gaussian_iters = 30_000
-        self.first_gaussian = False
-        super().__init__(parser, "Overall Parameters")
 
 
 def get_combined_args(parser: ArgumentParser):

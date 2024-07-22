@@ -23,7 +23,7 @@ print(os.environ["PYTHONPATH"])
 
 shell_command_prefix = "python train-octree.py --eval -s "
 shell_command_postfix = " --sh_degree 3 --iterations 30000 --save_iterations 30000 "
-shell_param = "--lambda_opacity 2 --lambda_orientation 0.15 --lambda_scale 1.5 --opacity_reset_interval 300 -w"
+shell_param = "--lambda_opacity 2 --lambda_scale 1.5 --opacity_reset_interval 300 -w"
 
 for data_dir in data_dirs:
     command = shell_command_prefix + data_dir + shell_command_postfix + shell_param

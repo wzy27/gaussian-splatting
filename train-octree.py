@@ -59,9 +59,7 @@ def training(
     model_name = Path(dataset.source_path).stem
 
     octree = LOctreeA.LOTLoad(
-        path=os.path.join(
-            dataset.source_path, "SDF_1024_{}_reb.npz".format(model_name)
-        ),
+        path=os.path.join(dataset.source_path, "SDF_512_{}.npz".format(model_name)),
         path_d=None,
         load_full=False,
         load_dict=False,
@@ -139,15 +137,6 @@ def training(
         loss_scale = torch.mean(gaussians.get_scaling.min(axis=-1).values)
         loss_dict["scale_loss"] = loss_scale
 
-        # orientation loss - smallest scale direction with SDF direction
-        gaussian_orientation = gaussians.get_normal().squeeze()  # (N, 3), normalized
-        SDF_orientation = F.normalize(
-            octree.queryNormalFromTree(tree_coords)
-        )  # (N, 3), manually normalized
-        similarity = torch.abs((gaussian_orientation * SDF_orientation).sum(axis=-1))
-        loss_orientation = 1 - torch.mean(similarity)
-        loss_dict["orientation_loss"] = loss_orientation
-
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss_dict["image_l1_loss"] = Ll1
@@ -158,7 +147,6 @@ def training(
         loss = (
             loss
             + dataset.lambda_scale * loss_scale
-            + dataset.lambda_orientation * loss_orientation
             + dataset.lambda_opacity * loss_opacity_l2
         )
         loss_dict["total_loss"] = loss

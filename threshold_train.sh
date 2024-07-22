@@ -8,7 +8,6 @@ python train-octree.py \
     -m $OUTPUT_DIR/$DATASET_DIR/$SCENE \
     --iterations 30000 \
     --lambda_opacity 3 \
-    --lambda_orientation 0 \
     --lambda_scale 0.1 \
     --near_threshold $THRE \
     --opacity_scalar $SCALAR
